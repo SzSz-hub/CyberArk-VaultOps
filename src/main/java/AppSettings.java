@@ -8,6 +8,7 @@ import java.util.Map;
 
 public class AppSettings {
     public static final int MAX_SOURCES = 10;
+    public static final String DEFAULT_THEME = "light";
 
     public static class SourceProfile {
         private final String id;
@@ -57,6 +58,7 @@ public class AppSettings {
 
     private final List<SourceProfile> sourceProfiles = new ArrayList<>();
     private String activeProfileId;
+    private String theme = DEFAULT_THEME;
 
     public List<SourceProfile> getSourceProfiles() {
         List<SourceProfile> copy = new ArrayList<>();
@@ -96,6 +98,14 @@ public class AppSettings {
             }
         }
         return null;
+    }
+
+    public String getTheme() {
+        return theme;
+    }
+
+    public void setTheme(String theme) {
+        this.theme = normalizeTheme(theme);
     }
 
     public void ensureValidActiveProfile() {
@@ -194,5 +204,9 @@ public class AppSettings {
     private static String safe(String value) {
         return value == null ? "" : value;
     }
-}
 
+    private static String normalizeTheme(String value) {
+        String normalized = safe(value).trim().toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? DEFAULT_THEME : normalized;
+    }
+}

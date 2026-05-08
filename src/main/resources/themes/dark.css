@@ -1,0 +1,18 @@
+.root {
+    -app-bg: #111827;
+    -app-surface: #1a2436;
+    -app-surface-alt: #212e43;
+    -app-muted: #253247;
+    -app-border: #32445f;
+    -app-text: #eaf1ff;
+    -app-subtle-text: #91a5c4;
+    -app-accent: #6192ff;
+    -app-accent-soft: #4e7feb;
+    -app-text-on-accent: #ffffff;
+    -app-selection: #2d467b;
+    -app-hover: #2a3850;
+    -app-row-alt: #182131;
+    -app-toast-bg: rgba(8, 11, 17, 0.96);
+    -app-toast-text: #edf2ff;
+}
+

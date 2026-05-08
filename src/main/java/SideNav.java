@@ -24,7 +24,7 @@ import java.util.function.Consumer;
 
 public class SideNav extends VBox {
     private static final double EXPANDED_WIDTH = 220;
-    private static final double COLLAPSED_WIDTH = 58;
+    private static final double COLLAPSED_WIDTH = 68;
 
     private final BooleanProperty expanded = new SimpleBooleanProperty(false);
     private final ObservableList<AppSettings.SourceProfile> profiles = FXCollections.observableArrayList();
@@ -34,12 +34,17 @@ public class SideNav extends VBox {
     private Map<String, String> effectiveShortLabels = Map.of();
 
     public SideNav() {
+        getStyleClass().add("side-nav");
         setPrefWidth(COLLAPSED_WIDTH);
         setSpacing(6);
 
         Button toggle = new Button("≡");
+        toggle.prefWidthProperty().bind(prefWidthProperty().subtract(12));  //padding 6 + 6
+        toggle.setMaxWidth(Double.MAX_VALUE);
+        toggle.getStyleClass().add("side-nav-toggle");
         toggle.setOnAction(e -> toggle());
 
+        listView.getStyleClass().add("side-nav-list");
         listView.setCellFactory(lv -> new DraggableProfileCell());
         listView.setPlaceholder(new Label("No sources"));
         listView.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {

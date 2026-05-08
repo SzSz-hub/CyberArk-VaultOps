@@ -18,18 +18,26 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
+import java.awt.Desktop;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 public class UI {
     private final AppSettings settings;
     private final AppSettingsStore settingsStore;
+    private final ThemeManager themeManager;
+    private final List<ThemeManager.ThemeOption> availableThemes = new ArrayList<>();
 
     private BorderPane root;
     private VBox toastContainer;
     private SideNav sideNav;
     private Stage primaryStage;
+    private Scene mainScene;
+    private Menu themeMenu;
     private boolean suppressSideNavCallbacks;
 
     private TableView<PVConfigurationParser.PSMServerEntry> psmTable;
@@ -42,6 +50,7 @@ public class UI {
     UI(AppSettings settings, AppSettingsStore settingsStore) {
         this.settings = settings;
         this.settingsStore = settingsStore;
+        this.themeManager = new ThemeManager(settingsStore.getThemesDirectory());
     }
 
     void setOnSourceProfileChanged(Runnable onSourceProfileChanged) {
@@ -96,7 +105,9 @@ public class UI {
 
     void setupUI(Stage stage) {
         this.primaryStage = stage;
+        refreshAvailableThemes();
         root = new BorderPane();
+        root.getStyleClass().add("app-body");
         root.setTop(createTopBar());
         sideNav = new SideNav();
         sideNav.setOnProfileSelected(profile -> {
@@ -126,13 +137,17 @@ public class UI {
 
         stage.setTitle("CyberArk VaultOps v1.0");
         StackPane sceneRoot = new StackPane(root);
+        sceneRoot.getStyleClass().add("app-shell");
         toastContainer = new VBox(8);
+        toastContainer.getStyleClass().add("toast-container");
         toastContainer.setMouseTransparent(true);
         StackPane.setAlignment(toastContainer, Pos.BOTTOM_RIGHT);
         StackPane.setMargin(toastContainer, new Insets(14));
         sceneRoot.getChildren().add(toastContainer);
 
-        stage.setScene(new Scene(sceneRoot, 900, 600));
+        mainScene = new Scene(sceneRoot, 900, 600);
+        applyTheme(mainScene);
+        stage.setScene(mainScene);
         stage.show();
     }
 
@@ -142,6 +157,7 @@ public class UI {
 
     private MenuBar createMenuBar() {
         MenuBar menuBar = new MenuBar();
+        menuBar.getStyleClass().add("app-menu-bar");
 
         Menu fileMenu = new Menu("File");
         fileMenu.getItems().addAll(
@@ -159,7 +175,9 @@ public class UI {
         Menu SettingsMenu = new Menu("Settings");
         MenuItem sourcesItem = new MenuItem("Sources");
         sourcesItem.setOnAction(event -> openSourcesSettingsDialog());
-        SettingsMenu.getItems().addAll(sourcesItem, new MenuItem("Theme"));
+        themeMenu = new Menu("Theme");
+        refreshThemeMenu();
+        SettingsMenu.getItems().addAll(sourcesItem, themeMenu);
 
         Menu ViewMenu = new Menu("View");
         Menu helpMenu = new Menu("Help");
@@ -170,6 +188,7 @@ public class UI {
 
     private TabPane createTabPane() {
         tabPane = new TabPane();
+        tabPane.getStyleClass().add("main-tab-pane");
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         Tab connectionComponents = new Tab("Connection Components");
@@ -203,12 +222,15 @@ public class UI {
 
     private VBox createPlatformsContent() {
         VBox container = new VBox(4);
+        container.getStyleClass().add("content-pane");
         container.setPadding(new Insets(8));
 
         TableView<?> table = new TableView<>();
+        table.getStyleClass().add("modern-table");
         table.getColumns().addAll(
                 new TableColumn<>("Platform ID"),
-                new TableColumn<>("Enabled")
+                new TableColumn<>("Enabled"),
+                new TableColumn<>("Overwrite")
         );
         table.setPlaceholder(new Label("No platforms loaded"));
         VBox.setVgrow(table, Priority.ALWAYS);
@@ -218,6 +240,7 @@ public class UI {
 
     private VBox createTargetsContent() {
         VBox container = new VBox(4);
+        container.getStyleClass().add("content-pane");
         container.setPadding(new Insets(8));
         container.getChildren().add(new Label("Targets — coming soon"));
         return container;
@@ -226,8 +249,10 @@ public class UI {
     private VBox getConnectionComponentContent() {
         if (connectionComponentContent == null) {
             connectionComponentContent = new VBox();
+            connectionComponentContent.getStyleClass().add("content-pane");
 
             connectionComponentTable = new TableView<>();
+            connectionComponentTable.getStyleClass().add("modern-table");
             connectionComponentTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             connectionComponentTable.setPlaceholder(new Label("No Connection Component loaded"));
             connectionComponentTable.getColumns().addAll(
@@ -240,7 +265,7 @@ public class UI {
             connectionComponentTable.setRowFactory(tv -> {
                 TableRow<PVConfigurationParser.ConnectionComponentEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
-                    if (!row.isEmpty()) {
+                    if (!row.isEmpty() && event.getClickCount() == 2) {
                         onConnectionComponentRowSelected.accept(row.getItem());
                     }
                 });
@@ -257,8 +282,10 @@ public class UI {
     private VBox getPsmContent() {
         if (psmContent == null) {
             psmContent = new VBox();
+            psmContent.getStyleClass().add("content-pane");
 
             psmTable = new TableView<>();
+            psmTable.getStyleClass().add("modern-table");
             psmTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             psmTable.setPlaceholder(new Label("No PSM servers loaded"));
             psmTable.getColumns().addAll(
@@ -279,8 +306,10 @@ public class UI {
     private VBox getPsmpContent() {
         if (psmpContent == null) {
             psmpContent = new VBox(4);
+            psmpContent.getStyleClass().add("content-pane");
 
             psmpTable = new TableView<>();
+            psmpTable.getStyleClass().add("modern-table");
             psmpTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             psmpTable.setPlaceholder(new Label("No PSMP servers loaded"));
             psmpTable.getColumns().addAll(
@@ -313,6 +342,7 @@ public class UI {
 
     private HBox createStatusBar() {
         HBox statusBar = new HBox(16);
+        statusBar.getStyleClass().add("status-bar");
         statusBar.setPadding(new Insets(6));
 
         Label lastUpdate = new Label("Last update time: 2026-05-06 11:34");
@@ -341,7 +371,7 @@ public class UI {
         String text = (message == null || message.isBlank()) ? "Load failed." : message;
 
         Label toast = new Label(text);
-        toast.setStyle("-fx-background-color: rgba(30,30,30,0.95); -fx-text-fill: white; -fx-padding: 10 14 10 14; -fx-background-radius: 8;");
+        toast.getStyleClass().add("toast-message");
         toast.setWrapText(true);
         toast.setMaxWidth(440);
         toast.setMouseTransparent(true);
@@ -356,6 +386,270 @@ public class UI {
         suppressSideNavCallbacks = true;
         sideNav.setProfiles(settings.getSourceProfiles(), settings.getActiveProfileId());
         suppressSideNavCallbacks = false;
+    }
+
+    void applyTheme(Scene scene) {
+        ThemeManager.ThemeOption resolvedTheme = resolveActiveTheme();
+        applyTheme(scene, resolvedTheme);
+    }
+
+    private void applyTheme(Scene scene, ThemeManager.ThemeOption theme) {
+        if (scene == null) {
+            return;
+        }
+        if (availableThemes.isEmpty()) {
+            refreshAvailableThemes();
+        }
+
+        if (theme == null) {
+            scene.getStylesheets().clear();
+            return;
+        }
+
+        scene.getStylesheets().setAll(themeManager.buildStylesheetUris(theme));
+    }
+
+    private ThemeManager.ThemeOption resolveActiveTheme() {
+        if (availableThemes.isEmpty()) {
+            refreshAvailableThemes();
+        }
+
+        ThemeManager.ThemeOption resolvedTheme = themeManager.resolveTheme(settings.getTheme(), availableThemes);
+        if (resolvedTheme != null) {
+            settings.setTheme(resolvedTheme.id());
+        }
+        return resolvedTheme;
+    }
+
+    private void refreshAvailableThemes() {
+        availableThemes.clear();
+        availableThemes.addAll(themeManager.discoverThemes());
+    }
+
+    private void refreshThemeMenu() {
+        if (themeMenu == null) {
+            return;
+        }
+
+        refreshAvailableThemes();
+        themeMenu.getItems().clear();
+
+        ThemeManager.ThemeOption resolvedTheme = resolveActiveTheme();
+        if (resolvedTheme != null && !resolvedTheme.id().equals(settings.getTheme())) {
+            settings.setTheme(resolvedTheme.id());
+            settingsStore.save(settings);
+        }
+
+        ToggleGroup themeGroup = new ToggleGroup();
+        for (ThemeManager.ThemeOption theme : availableThemes) {
+            RadioMenuItem item = new RadioMenuItem(theme.displayName());
+            item.setToggleGroup(themeGroup);
+            item.setSelected(resolvedTheme != null && theme.id().equals(resolvedTheme.id()));
+            item.setOnAction(event -> activateTheme(theme.id(), true));
+            themeMenu.getItems().add(item);
+        }
+
+        if (themeMenu.getItems().isEmpty()) {
+            MenuItem emptyItem = new MenuItem("No themes available");
+            emptyItem.setDisable(true);
+            themeMenu.getItems().add(emptyItem);
+        }
+
+        themeMenu.getItems().add(new SeparatorMenuItem());
+
+        MenuItem refreshThemesItem = new MenuItem("Refresh themes");
+        refreshThemesItem.setOnAction(event -> {
+            refreshThemeMenu();
+            applyTheme(mainScene);
+            showToast("Themes refreshed from " + themeManager.externalThemesDirectory());
+        });
+
+        MenuItem openThemesFolderItem = new MenuItem("Open themes folder");
+        openThemesFolderItem.setOnAction(event -> openThemesFolder());
+
+        MenuItem previewThemesItem = new MenuItem("Theme preview...");
+        previewThemesItem.setOnAction(event -> openThemePreviewDialog());
+
+        themeMenu.getItems().addAll(refreshThemesItem, openThemesFolderItem, previewThemesItem);
+    }
+
+    private void activateTheme(String themeId, boolean persistSelection) {
+        settings.setTheme(themeId);
+        ThemeManager.ThemeOption selected = resolveActiveTheme();
+        if (persistSelection) {
+            settingsStore.save(settings);
+        }
+        applyTheme(mainScene, selected);
+    }
+
+    private void openThemePreviewDialog() {
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("Theme Preview");
+
+        refreshAvailableThemes();
+        ThemeManager.ThemeOption initialTheme = resolveActiveTheme();
+
+        ListView<ThemeManager.ThemeOption> themeList = new ListView<>(FXCollections.observableArrayList(availableThemes));
+        themeList.getStyleClass().addAll("theme-list", "source-settings-list");
+        themeList.setPrefWidth(230);
+        themeList.setCellFactory(lv -> new ListCell<>() {
+            @Override
+            protected void updateItem(ThemeManager.ThemeOption item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    return;
+                }
+                setText(item.displayName() + (item.external() ? "  [Custom]" : ""));
+            }
+        });
+
+        TabPane previewTabs = new TabPane(
+                new Tab("Overview", buildPreviewOverview()),
+                new Tab("Table", buildPreviewTable()),
+                new Tab("Sidebar", buildPreviewSidebar())
+        );
+        previewTabs.getStyleClass().addAll("main-tab-pane", "preview-tabs");
+        previewTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        BorderPane dialogRoot = new BorderPane();
+        dialogRoot.getStyleClass().addAll("settings-dialog", "theme-preview-dialog");
+        dialogRoot.setPadding(new Insets(12));
+        dialogRoot.setLeft(themeList);
+        dialogRoot.setCenter(previewTabs);
+        BorderPane.setMargin(previewTabs, new Insets(0, 0, 0, 12));
+
+        Button applyButton = new Button("Apply Theme");
+        Button closeButton = new Button("Close");
+        HBox actions = new HBox(8, applyButton, closeButton);
+        actions.getStyleClass().add("dialog-actions");
+        actions.setAlignment(Pos.CENTER_RIGHT);
+        dialogRoot.setBottom(actions);
+
+        Scene previewScene = new Scene(dialogRoot, 900, 620);
+        applyTheme(previewScene, initialTheme);
+        dialog.setScene(previewScene);
+
+        themeList.getSelectionModel().selectedItemProperty().addListener((obs, oldTheme, newTheme) -> {
+            if (newTheme != null) {
+                applyTheme(previewScene, newTheme);
+            }
+        });
+
+        if (!availableThemes.isEmpty()) {
+            ThemeManager.ThemeOption selectedTheme = initialTheme;
+            if (selectedTheme == null) {
+                selectedTheme = availableThemes.get(0);
+            }
+            themeList.getSelectionModel().select(selectedTheme);
+        }
+
+        applyButton.setOnAction(event -> {
+            ThemeManager.ThemeOption selected = themeList.getSelectionModel().getSelectedItem();
+            if (selected == null) {
+                return;
+            }
+            settings.setTheme(selected.id());
+            settingsStore.save(settings);
+            applyTheme(mainScene, selected);
+            refreshThemeMenu();
+            showToast("Applied theme: " + selected.displayName());
+        });
+
+        closeButton.setOnAction(event -> dialog.close());
+        dialog.showAndWait();
+    }
+
+    private VBox buildPreviewOverview() {
+        VBox pane = new VBox(12);
+        pane.getStyleClass().add("content-pane");
+        pane.setPadding(new Insets(14));
+
+        Label title = new Label("Theme Preview");
+        title.getStyleClass().add("preview-title");
+        Label subtitle = new Label("Check colors, spacing and contrast before applying the theme globally.");
+        subtitle.getStyleClass().add("preview-subtitle");
+
+        TextField field = new TextField("PSM-SRV-01");
+        field.setPromptText("Search...");
+        Button primary = new Button("Primary Action");
+        Button secondary = new Button("Secondary");
+        secondary.getStyleClass().add("secondary-button");
+        HBox controls = new HBox(8, field, primary, secondary);
+        HBox.setHgrow(field, Priority.ALWAYS);
+
+        Label info = new Label("This panel previews common controls used across the app.");
+        info.getStyleClass().add("preview-note");
+
+        pane.getChildren().addAll(title, subtitle, controls, info);
+        return pane;
+    }
+
+    private VBox buildPreviewTable() {
+        VBox pane = new VBox(8);
+        pane.getStyleClass().add("content-pane");
+        pane.setPadding(new Insets(12));
+
+        TableView<PreviewRow> table = new TableView<>();
+        table.getStyleClass().add("modern-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+        table.getColumns().addAll(
+                makePreviewColumn("Host", PreviewRow::host),
+                makePreviewColumn("Zone", PreviewRow::zone),
+                makePreviewColumn("Status", PreviewRow::status)
+        );
+        table.setItems(FXCollections.observableArrayList(
+                new PreviewRow("psm-01", "Prod", "Online"),
+                new PreviewRow("psm-02", "DR", "Online"),
+                new PreviewRow("psm-03", "Lab", "Maintenance")
+        ));
+        VBox.setVgrow(table, Priority.ALWAYS);
+        pane.getChildren().add(table);
+        return pane;
+    }
+
+    private VBox buildPreviewSidebar() {
+        VBox pane = new VBox(10);
+        pane.getStyleClass().add("content-pane");
+        pane.setPadding(new Insets(12));
+
+        Label title = new Label("Sidebar Sample");
+        title.getStyleClass().add("preview-title");
+
+        ListView<String> nav = new ListView<>(FXCollections.observableArrayList(
+                "Production Vault",
+                "Disaster Recovery",
+                "Development Vault",
+                "Training Vault"
+        ));
+        nav.getStyleClass().addAll("side-nav-list", "preview-sidebar-list");
+        nav.getSelectionModel().select(0);
+
+        VBox.setVgrow(nav, Priority.ALWAYS);
+        pane.getChildren().addAll(title, nav);
+        return pane;
+    }
+
+    private TableColumn<PreviewRow, String> makePreviewColumn(String header, java.util.function.Function<PreviewRow, String> getter) {
+        TableColumn<PreviewRow, String> column = new TableColumn<>(header);
+        column.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(getter.apply(data.getValue())));
+        return column;
+    }
+
+    private void openThemesFolder() {
+        Path themesDirectory = themeManager.externalThemesDirectory();
+        try {
+            Files.createDirectories(themesDirectory);
+            if (Desktop.isDesktopSupported()) {
+                Desktop.getDesktop().open(themesDirectory.toFile());
+            } else {
+                showToast("Themes folder: " + themesDirectory);
+            }
+        } catch (IOException | UnsupportedOperationException e) {
+            showToast("Cannot open themes folder: " + themesDirectory);
+        }
     }
 
     private void reloadCurrentTab() {
@@ -384,6 +678,7 @@ public class UI {
 
         ObservableList<AppSettings.SourceProfile> draftProfiles = FXCollections.observableArrayList(copyProfiles(settings.getSourceProfiles()));
         ListView<AppSettings.SourceProfile> listView = new ListView<>(draftProfiles);
+        listView.getStyleClass().add("source-settings-list");
         listView.setCellFactory(lv -> new SourceListCell(draftProfiles, listView));
 
         TextField displayNameField = new TextField();
@@ -392,6 +687,7 @@ public class UI {
         folderPathField.setPromptText("e.g. \\\\prodserver1\\c$\\programfiles\\cyberark\\pvwa\\temp\\ or .\\prodlu\\");
 
         Label activeLabel = new Label();
+        activeLabel.getStyleClass().add("active-source-label");
         final String[] activeId = {settings.getActiveProfileId()};
         Runnable refreshActiveLabel = () -> {
             AppSettings.SourceProfile active = null;
@@ -535,12 +831,15 @@ public class UI {
                 activeLabel,
                 setActiveButton
         );
+        form.getStyleClass().add("settings-form");
         form.setPadding(new Insets(6));
 
         HBox buttons = new HBox(8, addButton, removeButton, saveButton, cancelButton);
+        buttons.getStyleClass().add("dialog-actions");
         buttons.setAlignment(Pos.CENTER_RIGHT);
 
         BorderPane dialogRoot = new BorderPane();
+        dialogRoot.getStyleClass().add("settings-dialog");
         dialogRoot.setPadding(new Insets(10));
         dialogRoot.setLeft(listView);
         dialogRoot.setCenter(form);
@@ -549,7 +848,9 @@ public class UI {
         BorderPane.setMargin(buttons, new Insets(10, 0, 0, 0));
         listView.setPrefWidth(280);
 
-        dialog.setScene(new Scene(dialogRoot, 760, 430));
+        Scene dialogScene = new Scene(dialogRoot, 760, 430);
+        applyTheme(dialogScene);
+        dialog.setScene(dialogScene);
         dialog.showAndWait();
     }
 
@@ -570,11 +871,9 @@ public class UI {
 
     private static class SourceListCell extends ListCell<AppSettings.SourceProfile> {
         private final ObservableList<AppSettings.SourceProfile> items;
-        private final ListView<AppSettings.SourceProfile> owner;
 
         private SourceListCell(ObservableList<AppSettings.SourceProfile> items, ListView<AppSettings.SourceProfile> owner) {
             this.items = items;
-            this.owner = owner;
 
             setOnDragDetected(event -> {
                 if (getItem() == null) {
@@ -643,6 +942,9 @@ public class UI {
         }
     }
 
+    private record PreviewRow(String host, String zone, String status) {
+    }
+
     private <T> TableColumn<T, String> makeColumn(
             String header,
             java.util.function.Function<T, String> getter,
@@ -653,14 +955,16 @@ public class UI {
                 new javafx.beans.property.SimpleStringProperty(getter.apply(data.getValue())));
 
         Label label = new Label(header);
-        label.setStyle("-fx-font-weight: bold;");
+        label.getStyleClass().add("table-header-title");
 
         TextField filterField = new TextField();
+        filterField.getStyleClass().add("column-filter-field");
         filterField.setPromptText("Filter...");
         filterField.setPrefHeight(22);
         filterField.setMaxWidth(Double.MAX_VALUE);
 
         VBox headerBox = new VBox(2, label, filterField);
+        headerBox.getStyleClass().add("table-header-box");
         col.setGraphic(headerBox);
         col.setUserData(filterField);
 

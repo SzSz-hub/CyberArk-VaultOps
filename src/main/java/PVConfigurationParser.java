@@ -3,11 +3,10 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.File;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public class PVConfigurationParser {
+public class PVConfigurationParser extends Parser {
     public record XmlNode(String name, Map<String, String> attributes, List<XmlNode> children) {
     }
 
@@ -146,42 +145,5 @@ public class PVConfigurationParser {
         }
 
         return entries;
-    }
-
-    private static String attr(Element element, String attrName) {
-        return element.hasAttribute(attrName) ? element.getAttribute(attrName).trim() : "";
-    }
-
-    private static XmlNode parseElementTree(Element element) {
-        return new XmlNode(element.getTagName(), parseAttributes(element), parseChildElements(element));
-    }
-
-    private static Map<String, String> parseAttributes(Element element) {
-        Map<String, String> attributes = new LinkedHashMap<>();
-        NamedNodeMap attributeNodes = element.getAttributes();
-        for (int i = 0; i < attributeNodes.getLength(); i++) {
-            Node node = attributeNodes.item(i);
-            attributes.put(node.getNodeName(), node.getNodeValue());
-        }
-        return attributes;
-    }
-
-    private static List<XmlNode> parseChildElements(Element element) {
-        List<XmlNode> children = new ArrayList<>();
-        NodeList nodes = element.getChildNodes();
-        for (int i = 0; i < nodes.getLength(); i++) {
-            Node node = nodes.item(i);
-            if (node.getNodeType() == Node.ELEMENT_NODE) {
-                children.add(parseElementTree((Element) node));
-            }
-        }
-        return children;
-    }
-
-    private static Element firstChildElement(Element parent, String childTagName) {
-        NodeList children = parent.getElementsByTagName(childTagName);
-        if (children.getLength() == 0) return null;
-        Node child = children.item(0);
-        return child.getNodeType() == Node.ELEMENT_NODE ? (Element) child : null;
     }
 }
