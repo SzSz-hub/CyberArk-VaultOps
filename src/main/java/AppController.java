@@ -11,23 +11,35 @@ import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.stage.Stage;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class AppController {
 
     private final UI ui;
+    private final AppSettings settings;
+    private final Consumer<String> onLoadError;
     private final PVConfigurationParser pvParser = new PVConfigurationParser();
     private boolean connectionComponentLoaded;
     private boolean psmpLoaded;
     private boolean psmLoaded;
 
-    private static final String PV_CONFIG_PATH = "";
-
-    public AppController(UI ui) {
+    public AppController(UI ui, AppSettings settings, Consumer<String> onLoadError) {
         this.ui = ui;
+        this.settings = settings;
+        this.onLoadError = onLoadError == null ? message -> {} : onLoadError;
     }
 
     public void loadAll() {
+    }
+
+    public void onSourceProfileChanged() {
+        connectionComponentLoaded = false;
+        psmpLoaded = false;
+        psmLoaded = false;
+        ui.clearDataTables();
     }
 
     public void showConnectionComponentDetails(PVConfigurationParser.ConnectionComponentEntry entry) {
@@ -55,12 +67,13 @@ public class AppController {
         }
 
         try {
+            String pvConfigPath = getActivePvConfigurationPath();
             ObservableList<PVConfigurationParser.ConnectionComponentEntry> masterData =
-                    FXCollections.observableArrayList(pvParser.GetConnectionComponents(PV_CONFIG_PATH));
+                    FXCollections.observableArrayList(pvParser.GetConnectionComponents(pvConfigPath));
             wireFiltering(ui.getConnectionComponentTable(), masterData);
             connectionComponentLoaded = true;
         } catch (Exception e) {
-            e.printStackTrace();
+            reportLoadError("connection components", e);
         }
     }
 
@@ -70,12 +83,13 @@ public class AppController {
         }
 
         try {
+            String pvConfigPath = getActivePvConfigurationPath();
             ObservableList<PVConfigurationParser.PSMPServerEntry> masterData =
-                    FXCollections.observableArrayList(pvParser.getPSMPServers(PV_CONFIG_PATH));
+                    FXCollections.observableArrayList(pvParser.getPSMPServers(pvConfigPath));
             wireFiltering(ui.getPsmpTable(), masterData);
             psmpLoaded = true;
         } catch (Exception e) {
-            e.printStackTrace();
+            reportLoadError("PSMP servers", e);
         }
     }
 
@@ -85,13 +99,44 @@ public class AppController {
         }
 
         try {
+            String pvConfigPath = getActivePvConfigurationPath();
             ObservableList<PVConfigurationParser.PSMServerEntry> masterData =
-                    FXCollections.observableArrayList(pvParser.getPSMServers(PV_CONFIG_PATH));
+                    FXCollections.observableArrayList(pvParser.getPSMServers(pvConfigPath));
             wireFiltering(ui.getPsmTable(), masterData);
             psmLoaded = true;
         } catch (Exception e) {
-            e.printStackTrace();
+            reportLoadError("PSM servers", e);
         }
+    }
+
+    private void reportLoadError(String target, Exception error) {
+        AppSettings.SourceProfile profile = settings.getActiveProfile();
+        String profileName = profile == null || profile.displayName() == null || profile.displayName().isBlank()
+                ? "selected source"
+                : profile.displayName();
+        String details = (error == null || error.getMessage() == null || error.getMessage().isBlank())
+                ? "Check folder path and file availability."
+                : error.getMessage();
+        onLoadError.accept("Cannot load " + target + " from " + profileName + ": " + details);
+    }
+
+    public String getActivePoliciesPath() {
+        return getActiveFolderPath().resolve("Policies.xml").toString();
+    }
+
+    private String getActivePvConfigurationPath() {
+        return getActiveFolderPath().resolve("PVConfiguration.xml").toString();
+    }
+
+    private Path getActiveFolderPath() {
+        AppSettings.SourceProfile profile = settings.getActiveProfile();
+        if (profile == null) {
+            throw new IllegalStateException("No source profile is selected.");
+        }
+        if (profile.folderPath() == null || profile.folderPath().isBlank()) {
+            throw new IllegalStateException("Source profile '" + profile.displayName() + "' has no folder configured.");
+        }
+        return Paths.get(profile.folderPath()).normalize();
     }
 
     private <T> void wireFiltering(TableView<T> table, ObservableList<T> masterData) {

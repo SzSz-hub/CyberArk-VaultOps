@@ -1,0 +1,130 @@
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
+
+public class AppSettingsStore {
+    private static final String SETTINGS_FILE = "app.properties";
+
+    private final Path settingsPath;
+
+    public AppSettingsStore() {
+        this(Paths.get(SETTINGS_FILE));
+    }
+
+    public AppSettingsStore(Path settingsPath) {
+        this.settingsPath = settingsPath;
+    }
+
+    public AppSettings load() {
+        AppSettings settings = new AppSettings();
+        Properties properties = new Properties();
+
+        if (settingsPath.toFile().exists()) {
+            try (FileInputStream in = new FileInputStream(settingsPath.toFile())) {
+                properties.load(in);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        List<AppSettings.SourceProfile> profiles = readProfiles(properties);
+        settings.replaceSourceProfiles(profiles);
+        settings.setActiveProfileId(properties.getProperty("activeProfile", ""));
+        settings.ensureValidActiveProfile();
+
+        if (!settingsPath.toFile().exists()) {
+            save(settings);
+        }
+
+        return settings;
+    }
+
+    public void save(AppSettings settings) {
+        Properties properties = new Properties();
+
+        List<AppSettings.SourceProfile> profiles = settings.getSourceProfiles();
+        StringBuilder order = new StringBuilder();
+        for (int i = 0; i < profiles.size(); i++) {
+            AppSettings.SourceProfile profile = profiles.get(i);
+            if (i > 0) {
+                order.append(',');
+            }
+            order.append(profile.id());
+
+            String prefix = "profile." + profile.id() + ".";
+            properties.setProperty(prefix + "displayName", valueOrEmpty(profile.displayName()));
+            properties.setProperty(prefix + "shortLabel", valueOrEmpty(profile.shortLabel()));
+            properties.setProperty(prefix + "folderPath", valueOrEmpty(profile.folderPath()));
+        }
+
+        properties.setProperty("profiles.order", order.toString());
+        properties.setProperty("activeProfile", valueOrEmpty(settings.getActiveProfileId()));
+
+        try (FileOutputStream out = new FileOutputStream(settingsPath.toFile())) {
+            properties.store(out, "CyberArkAdminTool settings");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private List<AppSettings.SourceProfile> readProfiles(Properties properties) {
+        List<AppSettings.SourceProfile> profiles = new ArrayList<>();
+
+        String order = properties.getProperty("profiles.order", "");
+        String[] orderedIds = order.split(",");
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        for (String orderedId : orderedIds) {
+            String id = orderedId.trim();
+            if (!id.isBlank()) {
+                ids.add(id);
+            }
+        }
+
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith("profile.") && key.endsWith(".displayName")) {
+                String id = key.substring("profile.".length(), key.length() - ".displayName".length());
+                if (!id.isBlank()) {
+                    ids.add(id);
+                }
+            }
+        }
+
+        for (String id : ids) {
+            String prefix = "profile." + id + ".";
+            AppSettings.SourceProfile profile = new AppSettings.SourceProfile(
+                    id,
+                    properties.getProperty(prefix + "displayName", ""),
+                    properties.getProperty(prefix + "shortLabel", ""),
+                    properties.getProperty(prefix + "folderPath", "")
+            );
+            profiles.add(profile);
+            if (profiles.size() >= AppSettings.MAX_SOURCES) {
+                break;
+            }
+        }
+
+        return profiles;
+    }
+
+    public static AppSettings.SourceProfile newProfile(String displayName) {
+        return new AppSettings.SourceProfile(
+                UUID.randomUUID().toString().replace("-", ""),
+                displayName,
+                "",
+                ""
+        );
+    }
+
+
+    private String valueOrEmpty(String value) {
+        return value == null ? "" : value;
+    }
+}
+
