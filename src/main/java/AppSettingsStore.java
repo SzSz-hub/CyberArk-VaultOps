@@ -37,6 +37,7 @@ public class AppSettingsStore {
         List<AppSettings.SourceProfile> profiles = readProfiles(properties);
         settings.replaceSourceProfiles(profiles);
         settings.setActiveProfileId(properties.getProperty("activeProfile", ""));
+        settings.setTheme(properties.getProperty("theme", AppSettings.DEFAULT_THEME));
         settings.ensureValidActiveProfile();
 
         if (!settingsPath.toFile().exists()) {
@@ -66,6 +67,7 @@ public class AppSettingsStore {
 
         properties.setProperty("profiles.order", order.toString());
         properties.setProperty("activeProfile", valueOrEmpty(settings.getActiveProfileId()));
+        properties.setProperty("theme", valueOrEmpty(settings.getTheme()));
 
         try (FileOutputStream out = new FileOutputStream(settingsPath.toFile())) {
             properties.store(out, "CyberArkAdminTool settings");
@@ -122,9 +124,14 @@ public class AppSettingsStore {
         );
     }
 
+    public Path getThemesDirectory() {
+        Path absoluteSettingsPath = settingsPath.toAbsolutePath().normalize();
+        Path parent = absoluteSettingsPath.getParent();
+        return (parent == null ? Paths.get(".").toAbsolutePath().normalize() : parent).resolve("themes");
+    }
+
 
     private String valueOrEmpty(String value) {
         return value == null ? "" : value;
     }
 }
-

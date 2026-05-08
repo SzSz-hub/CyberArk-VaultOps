@@ -1,0 +1,304 @@
+.root {
+    -fx-font-family: "Segoe UI", "Inter", sans-serif;
+
+    /* Fallback palette in case a custom theme misses variables. */
+    -app-bg: #f4f7fb;
+    -app-surface: #ffffff;
+    -app-surface-alt: #eef3fa;
+    -app-muted: #e3eaf6;
+    -app-border: #ced9ea;
+    -app-text: #1e2938;
+    -app-subtle-text: #66768f;
+    -app-accent: #2f6feb;
+    -app-accent-soft: #467df0;
+    -app-text-on-accent: #ffffff;
+    -app-selection: #dce8ff;
+    -app-hover: #edf3ff;
+    -app-row-alt: #f9fbff;
+    -app-toast-bg: rgba(24, 33, 48, 0.96);
+    -app-toast-text: #ffffff;
+
+    -fx-background-color: -app-bg;
+    -fx-text-fill: -app-text;
+    -fx-accent: -app-accent;
+    -fx-focus-color: -app-accent;
+    -fx-faint-focus-color: transparent;
+}
+
+.label {
+    -fx-text-fill: -app-text;
+}
+
+.app-shell,
+.app-body,
+.content-pane,
+.settings-dialog,
+.details-popup,
+.theme-preview-dialog,
+.viewport {
+    -fx-background-color: -app-bg;
+}
+
+.menu-bar,
+.context-menu {
+    -fx-background-color: -app-surface;
+    -fx-border-color: -app-border;
+    -fx-border-width: 0 0 1 0;
+}
+
+.menu-bar .label,
+.menu-item .label,
+.context-menu .label {
+    -fx-text-fill: -app-text;
+}
+
+.menu-item:focused,
+.menu-item:hover {
+    -fx-background-color: -app-hover;
+}
+
+.main-tab-pane {
+    -fx-padding: 0 10 0 10;
+}
+
+.tab-pane .tab-header-area .tab-header-background {
+    -fx-background-color: -app-bg;
+    -fx-border-color: transparent;
+}
+
+.tab-pane .tab-header-area {
+    -fx-padding: 6 0 0 0;
+}
+
+.tab-pane .tab {
+    -fx-background-color: transparent;
+    -fx-background-radius: 10 10 0 0;
+    -fx-border-color: transparent transparent transparent transparent;
+    -fx-border-width: 0 0 3 0;
+    -fx-padding: 8 16 8 16;
+}
+
+.tab-pane .tab:selected {
+    -fx-background-color: -app-surface;
+    -fx-border-color: transparent transparent -app-accent transparent;
+}
+
+.tab-pane .tab:hover {
+    -fx-background-color: -app-surface-alt;
+}
+
+.tab-pane .tab-label {
+    -fx-text-fill: -app-text;
+    -fx-font-weight: 600;
+}
+
+.tab-pane .tab-content-area {
+    -fx-background-color: -app-surface;
+    -fx-background-radius: 12;
+    -fx-border-color: -app-border;
+    -fx-border-radius: 12;
+    -fx-padding: 8 0 0 0;
+}
+
+.status-bar {
+    -fx-background-color: -app-surface;
+    -fx-border-color: -app-border transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+    -fx-padding: 8 12 8 12;
+    -fx-spacing: 12;
+}
+
+.side-nav {
+    -fx-background-color: -app-surface;
+    -fx-border-color: transparent -app-border transparent transparent;
+    -fx-border-width: 0 1 0 0;
+    -fx-padding: 10 6 10 6;
+    -fx-spacing: 10;
+}
+
+.side-nav .list-view {
+    -fx-padding: 4;
+}
+
+.side-nav-list .list-cell {
+    -fx-padding: 8 6 8 6;
+    -fx-alignment: center-left;
+}
+
+.side-nav-toggle,
+.button {
+    -fx-background-color: derive(-app-accent-soft, -16%), -app-accent-soft;
+    -fx-background-insets: 0, 1;
+    -fx-background-radius: 10, 9;
+    -fx-text-fill: -app-text-on-accent;
+    -fx-padding: 8 14 8 14;
+    -fx-font-weight: 700;
+    -fx-cursor: hand;
+}
+
+.secondary-button {
+    -fx-background-color: derive(-app-border, -8%), -app-surface-alt;
+    -fx-background-insets: 0, 1;
+    -fx-background-radius: 10, 9;
+    -fx-text-fill: -app-text;
+    -fx-border-color: transparent;
+}
+
+.side-nav-toggle:hover,
+.button:hover {
+    -fx-background-color: derive(-app-accent-soft, -12%), derive(-app-accent-soft, 8%);
+}
+
+.button:pressed,
+.side-nav-toggle:pressed {
+    -fx-background-color: derive(-app-accent-soft, -18%), derive(-app-accent-soft, -6%);
+    -fx-background-insets: 0, 1;
+    -fx-padding: 9 14 7 14;
+}
+
+.text-field,
+.text-area,
+.list-view,
+.table-view,
+.combo-box-base {
+    -fx-background-color: -app-surface;
+    -fx-control-inner-background: -app-surface;
+    -fx-border-color: -app-border;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-text-fill: -app-text;
+    -fx-highlight-fill: -app-accent;
+    -fx-highlight-text-fill: -app-text-on-accent;
+}
+
+.text-field {
+    -fx-prompt-text-fill: -app-subtle-text;
+}
+
+.list-view,
+.table-view {
+    -fx-background-insets: 0;
+    -fx-padding: 6;
+}
+
+.list-view .list-cell,
+.side-nav-list .list-cell,
+.source-settings-list .list-cell,
+.preview-sidebar-list .list-cell {
+    -fx-background-color: -app-surface;
+    -fx-text-fill: -app-text;
+    -fx-padding: 10 10 10 10;
+    -fx-background-radius: 8;
+}
+
+.list-view .list-cell:filled:hover,
+.side-nav-list .list-cell:filled:hover,
+.source-settings-list .list-cell:filled:hover,
+.preview-sidebar-list .list-cell:filled:hover {
+    -fx-background-color: -app-hover;
+}
+
+.list-view .list-cell:filled:selected,
+.side-nav-list .list-cell:filled:selected,
+.source-settings-list .list-cell:filled:selected,
+.preview-sidebar-list .list-cell:filled:selected {
+    -fx-background-color: -app-selection;
+    -fx-text-fill: -app-text;
+}
+
+.table-view .column-header-background {
+    -fx-background-color: -app-surface-alt;
+    -fx-background-radius: 8 8 0 0;
+    -fx-border-color: transparent transparent -app-border transparent;
+}
+
+.table-view .column-header,
+.table-view .filler,
+.table-view .corner {
+    -fx-background-color: -app-surface-alt;
+    -fx-border-color: transparent transparent -app-border transparent;
+}
+
+.table-view .table-cell {
+    -fx-text-fill: -app-text;
+    -fx-border-color: transparent;
+    -fx-padding: 8 10 8 10;
+}
+
+.table-row-cell {
+    -fx-background-color: -app-surface;
+    -fx-table-cell-border-color: transparent;
+}
+
+.table-row-cell:odd {
+    -fx-background-color: -app-row-alt;
+}
+
+.table-row-cell:hover {
+    -fx-background-color: -app-hover;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: -app-selection;
+}
+
+.table-header-title {
+    -fx-font-weight: 700;
+    -fx-text-fill: -app-text;
+}
+
+.column-filter-field {
+    -fx-background-color: -app-surface;
+    -fx-border-color: -app-border;
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+}
+
+.table-header-box {
+    -fx-padding: 4 0 6 0;
+}
+
+.toast-message {
+    -fx-background-color: -app-toast-bg;
+    -fx-text-fill: -app-toast-text;
+    -fx-padding: 10 14 10 14;
+    -fx-background-radius: 10;
+}
+
+.active-source-label,
+.details-title,
+.preview-title {
+    -fx-font-weight: 700;
+    -fx-text-fill: -app-text;
+}
+
+.preview-subtitle,
+.preview-note {
+    -fx-text-fill: -app-subtle-text;
+}
+
+.details-popup,
+.settings-dialog,
+.theme-preview-dialog {
+    -fx-padding: 12;
+}
+
+.details-title {
+    -fx-padding: 0 0 10 0;
+}
+
+.code-area {
+    -fx-font-family: "Consolas", "Cascadia Mono", monospace;
+    -fx-font-size: 12px;
+}
+
+.dialog-actions {
+    -fx-padding: 10 0 0 0;
+    -fx-spacing: 8;
+}
+
+.settings-form {
+    -fx-padding: 8;
+    -fx-spacing: 8;
+}
+

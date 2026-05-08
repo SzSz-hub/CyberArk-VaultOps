@@ -1,0 +1,41 @@
+.root {
+    -app-bg: #000000;
+    -app-surface: #111111;
+    -app-surface-alt: #1a1a1a;
+    -app-muted: #1a1a1a;
+    -app-border: #f5f5f5;
+    -app-text: #ffffff;
+    -app-subtle-text: #d7d7d7;
+    -app-accent: #ffe600;
+    -app-accent-soft: #ffd000;
+    -app-text-on-accent: #000000;
+    -app-selection: #3c3c00;
+    -app-hover: #242424;
+    -app-row-alt: #0d0d0d;
+    -app-toast-bg: rgba(255, 230, 0, 0.96);
+    -app-toast-text: #000000;
+}
+
+.button,
+.side-nav-toggle {
+    -fx-border-color: #ffffff;
+    -fx-border-width: 1.5;
+}
+
+.text-field,
+.text-area,
+.table-view,
+.list-view,
+.menu-bar,
+.context-menu {
+    -fx-border-width: 1.5;
+}
+
+.tab-pane .tab,
+.tab-pane .tab:selected,
+.table-view .column-header-background,
+.table-view .column-header,
+.table-view .filler {
+    -fx-border-color: #ffffff;
+}
+
