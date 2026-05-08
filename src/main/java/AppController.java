@@ -48,16 +48,21 @@ public class AppController {
         }
 
         TextArea detailsArea = new TextArea(formatConnectionComponentDetails(entry.details()));
+        detailsArea.getStyleClass().add("code-area");
         detailsArea.setEditable(false);
         detailsArea.setWrapText(false);
-        detailsArea.setStyle("-fx-font-family: 'Consolas'; -fx-font-size: 12;");
 
         BorderPane root = new BorderPane(detailsArea);
-        root.setTop(new Label("Connection Component: " + entry.id()));
+        root.getStyleClass().add("details-popup");
+        Label title = new Label("Connection Component: " + entry.id());
+        title.getStyleClass().add("details-title");
+        root.setTop(title);
 
         Stage popup = new Stage();
         popup.setTitle("Connection Component Details");
-        popup.setScene(new Scene(root, 900, 700));
+        Scene scene = new Scene(root, 900, 700);
+        ui.applyTheme(scene);
+        popup.setScene(scene);
         popup.show();
     }
 
