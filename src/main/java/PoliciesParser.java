@@ -11,11 +11,36 @@ import java.util.List;
 import java.util.Map;
 
 public class PoliciesParser extends Parser {
-    public record XmlNode(String name, Map<String, String> attributes, List<PVConfigurationParser.XmlNode> children) {
+    public record policiesEntry(String id, String name, String ClientApp, String ClientDispatcher, XmlNode details) {
     }
 
-    public record policiesEntry(String id, String name, String ClientApp, String ClientDispatcher, PVConfigurationParser.XmlNode details) {
-    }
+    public record deviceEntry(String name, List<policiesEntry> policiesEntries){}
+    public record usageEntry (String name, List<XmlNode> children){}
+
+    public List<usageEntry> getUsage(String policiesPath) throws Exception{
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setIgnoringComments(true);
+
+        DocumentBuilder db = dbf.newDocumentBuilder();
+        Document doc = db.parse(new File(policiesPath));
+        doc.getDocumentElement().normalize();
+
+        NodeList nodeList = doc.getElementsByTagName("usages");
+        List<usageEntry> usagesEntries = new ArrayList<>();
+        for (int i = 0; i < nodeList.getLength(); i++) {
+            Node node = nodeList.item(i);
+            if (node.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element usage = (Element) node;
+            String name = usage.getAttribute("ID");
+
+            usagesEntries.add(new usageEntry(name, parseChildElements(usage)));
+        }
+
+        return usagesEntries;
+    };
 
     public List<PVConfigurationParser.ConnectionComponentEntry> GetConnectionComponents(String pvConfigurationPath) throws Exception {
         DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
