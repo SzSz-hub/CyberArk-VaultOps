@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 
 public class Parser {
+    public record XmlNode(String name, Map<String, String> attributes, List<XmlNode> children) {
+    }
 
     static String attr(Element element, String attrName) {
         return element.hasAttribute(attrName) ? element.getAttribute(attrName).trim() : "";
@@ -35,7 +37,7 @@ public class Parser {
         return attributes;
     }
 
-    private static List<PVConfigurationParser.XmlNode> parseChildElements(Element element) {
+    static List<PVConfigurationParser.XmlNode> parseChildElements(Element element) {
         List<PVConfigurationParser.XmlNode> children = new ArrayList<>();
         NodeList nodes = element.getChildNodes();
         for (int i = 0; i < nodes.getLength(); i++) {
