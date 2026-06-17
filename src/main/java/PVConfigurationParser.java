@@ -4,12 +4,8 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 public class PVConfigurationParser extends Parser {
-    public record XmlNode(String name, Map<String, String> attributes, List<XmlNode> children) {
-    }
-
     public record ConnectionComponentEntry(String id, String name, String ClientApp, String ClientDispatcher, XmlNode details) {
     }
 
