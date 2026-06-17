@@ -17,8 +17,14 @@ public class Main extends Application {
         ui.setOnPsmTabSelected(controller::loadPSMServersIfNeeded);
         ui.setOnConnectionComponentTabSelected(controller::loadConnectionComponentIfNeeded);
         ui.setOnConnectionComponentRowSelected(controller::showConnectionComponentDetails);
+        ui.setOnConnectionComponentSelected(controller::onConnectionComponentSelected);
+        ui.setOnPoliciesTabSelected(controller::loadPoliciesIfNeeded);
+        ui.setOnUsagesTabSelected(controller::loadUsageIfNeeded);
+        ui.setOnTargetsTabSelected(controller::loadTargetsIfNeeded);
+        ui.setOnPolicyRowSelected(controller::onPolicySelected);
+        ui.setOnPolicyRowDoubleClicked(controller::showPolicyDetails);
+        ui.setOnUsageRowSelected(controller::onUsageSelected);
         ui.setOnSourceProfileChanged(controller::onSourceProfileChanged);
-        ui.setOnUsageSelected(controller::loadUsageIfNeeded);
         ui.setOnRefreshCurrentRequested(controller::invalidateCurrentSelection);
         ui.setOnReloadAllRequested(controller::invalidateAllSourcesForActiveEnvironment);
         ui.setOnStatusRefreshRequested(controller::refreshStatusIndicators);

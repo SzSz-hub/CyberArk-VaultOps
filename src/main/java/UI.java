@@ -48,8 +48,10 @@ public class UI {
     private Runnable onPsmTabSelected = NO_OP;
     private Runnable onSourceProfileChanged = NO_OP;
     private Runnable onPsmpTabSelected = NO_OP;
-    private Runnable onUsageSelected = NO_OP;
     private Runnable onConnectionComponentTabSelected = NO_OP;
+    private Runnable onPoliciesTabSelected = NO_OP;
+    private Runnable onUsagesTabSelected = NO_OP;
+    private Runnable onTargetsTabSelected = NO_OP;
     private Runnable onRefreshCurrentRequested = NO_OP;
     private Runnable onReloadAllRequested = NO_OP;
     private Runnable onStatusRefreshRequested = NO_OP;
@@ -92,19 +94,30 @@ public class UI {
 
     private TableView<PoliciesParser.usageEntry> usageTable;
     private VBox usageContent;
+    private TableView<PoliciesParser.UsagePolicyEntry> usagePolicyAssignmentsTable;
 
     TableView<PoliciesParser.usageEntry> getUsageTable() {
         return usageTable;
-    }
-
-    void setOnUsageSelected(Runnable onUsageSelected) {
-        this.onUsageSelected = safeRunnable(onUsageSelected);
     }
 
     private TableView<PVConfigurationParser.ConnectionComponentEntry> connectionComponentTable;
     private VBox connectionComponentContent;
 
     private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowSelected = entry -> {
+    };
+    private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentSelected = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowSelected = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowDoubleClicked = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.usageEntry> onUsageRowSelected = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.ComponentAssignmentEntry> onConnectionAssignmentDoubleClicked = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.ComponentAssignmentEntry> onPolicyComponentDoubleClicked = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.UsagePolicyEntry> onUsagePolicyDoubleClicked = entry -> {
     };
 
     TableView<PVConfigurationParser.ConnectionComponentEntry> getConnectionComponentTable() {
@@ -115,9 +128,76 @@ public class UI {
         this.onConnectionComponentTabSelected = safeRunnable(onConnectionComponentTabSelected);
     }
 
+    void setOnPoliciesTabSelected(Runnable onPoliciesTabSelected) {
+        this.onPoliciesTabSelected = safeRunnable(onPoliciesTabSelected);
+    }
+
+    void setOnUsagesTabSelected(Runnable onUsagesTabSelected) {
+        this.onUsagesTabSelected = safeRunnable(onUsagesTabSelected);
+    }
+
+    void setOnTargetsTabSelected(Runnable onTargetsTabSelected) {
+        this.onTargetsTabSelected = safeRunnable(onTargetsTabSelected);
+    }
+
     void setOnConnectionComponentRowSelected(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowSelected) {
         this.onConnectionComponentRowSelected = onConnectionComponentRowSelected == null ? entry -> {
         } : onConnectionComponentRowSelected;
+    }
+
+    void setOnConnectionComponentSelected(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentSelected) {
+        this.onConnectionComponentSelected = onConnectionComponentSelected == null ? entry -> {
+        } : onConnectionComponentSelected;
+    }
+
+    void setOnPolicyRowSelected(java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowSelected) {
+        this.onPolicyRowSelected = onPolicyRowSelected == null ? entry -> {
+        } : onPolicyRowSelected;
+    }
+
+    void setOnPolicyRowDoubleClicked(java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowDoubleClicked) {
+        this.onPolicyRowDoubleClicked = onPolicyRowDoubleClicked == null ? entry -> {
+        } : onPolicyRowDoubleClicked;
+    }
+
+    void setOnUsageRowSelected(java.util.function.Consumer<PoliciesParser.usageEntry> onUsageRowSelected) {
+        this.onUsageRowSelected = onUsageRowSelected == null ? entry -> {
+        } : onUsageRowSelected;
+    }
+
+    void setOnConnectionAssignmentDoubleClicked(java.util.function.Consumer<PoliciesParser.ComponentAssignmentEntry> onConnectionAssignmentDoubleClicked) {
+        this.onConnectionAssignmentDoubleClicked = onConnectionAssignmentDoubleClicked == null ? entry -> {
+        } : onConnectionAssignmentDoubleClicked;
+    }
+
+    void setOnPolicyComponentDoubleClicked(java.util.function.Consumer<PoliciesParser.ComponentAssignmentEntry> onPolicyComponentDoubleClicked) {
+        this.onPolicyComponentDoubleClicked = onPolicyComponentDoubleClicked == null ? entry -> {
+        } : onPolicyComponentDoubleClicked;
+    }
+
+    void setOnUsagePolicyDoubleClicked(java.util.function.Consumer<PoliciesParser.UsagePolicyEntry> onUsagePolicyDoubleClicked) {
+        this.onUsagePolicyDoubleClicked = onUsagePolicyDoubleClicked == null ? entry -> {
+        } : onUsagePolicyDoubleClicked;
+    }
+
+    TableView<PoliciesParser.PolicyEntry> getPoliciesTable() {
+        return policiesTable;
+    }
+
+    TableView<PoliciesParser.TargetEntry> getTargetsTable() {
+        return targetsTable;
+    }
+
+    TableView<PoliciesParser.UsagePolicyEntry> getUsagePolicyAssignmentsTable() {
+        return usagePolicyAssignmentsTable;
+    }
+
+    TableView<PoliciesParser.ComponentAssignmentEntry> getPolicyAssignmentsTable() {
+        return policyAssignmentsTable;
+    }
+
+    TableView<PoliciesParser.ComponentAssignmentEntry> getConnectionAssignmentTable() {
+        return connectionAssignmentTable;
     }
 
     void setOnRefreshCurrentRequested(Runnable onRefreshCurrentRequested) {
@@ -137,6 +217,12 @@ public class UI {
     private Label sourceStatusLabel;
     private Label pvLoadStatusLabel;
     private Label policiesLoadStatusLabel;
+    private TableView<PoliciesParser.PolicyEntry> policiesTable;
+    private VBox policiesContent;
+    private TableView<PoliciesParser.ComponentAssignmentEntry> connectionAssignmentTable;
+    private TableView<PoliciesParser.TargetEntry> targetsTable;
+    private VBox targetsContent;
+    private TableView<PoliciesParser.ComponentAssignmentEntry> policyAssignmentsTable;
 
     void setupUI(Stage stage) {
         this.primaryStage = stage;
@@ -229,20 +315,29 @@ public class UI {
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         Tab connectionComponents = new Tab("Connection Components");
-        Tab platforms = new Tab("Platforms");
+        Tab policies = new Tab("Policies");
+        Tab usages = new Tab("Usages");
         Tab targets = new Tab("Targets");
         Tab psms = new Tab("PSMs");
         Tab psmps = new Tab("PSMPs");
 
-        tabPane.getTabs().addAll(connectionComponents, platforms, targets, psms, psmps);
+        tabPane.getTabs().addAll(connectionComponents, policies, usages, targets, psms, psmps);
 
         tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
             if (root == null) return;
             if (newTab == connectionComponents) {
                 root.setCenter(getConnectionComponentContent());
                 onConnectionComponentTabSelected.run();
-            } else if (newTab == platforms) root.setCenter(createPlatformsContent());
-            else if (newTab == targets) root.setCenter(createTargetsContent());
+            } else if (newTab == policies) {
+                root.setCenter(getPoliciesContent());
+                onPoliciesTabSelected.run();
+            } else if (newTab == usages) {
+                root.setCenter(getUsagesContent());
+                onUsagesTabSelected.run();
+            } else if (newTab == targets) {
+                root.setCenter(getTargetsContent());
+                onTargetsTabSelected.run();
+            }
             else if (newTab == psms) {
                 root.setCenter(getPsmContent());
                 onPsmTabSelected.run();
@@ -302,18 +397,186 @@ public class UI {
             connectionComponentTable.setRowFactory(tv -> {
                 TableRow<PVConfigurationParser.ConnectionComponentEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
-                    if (!row.isEmpty() && event.getClickCount() == 2) {
+                    if (row.isEmpty()) {
+                        return;
+                    }
+                    if (event.getClickCount() == 2) {
                         onConnectionComponentRowSelected.accept(row.getItem());
                     }
                 });
                 return row;
             });
 
+            connectionComponentTable.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
+                if (newVal != null) {
+                    onConnectionComponentSelected.accept(newVal);
+                }
+            });
+
+            connectionAssignmentTable = new TableView<>();
+            connectionAssignmentTable.getStyleClass().add("modern-table");
+            connectionAssignmentTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            connectionAssignmentTable.setPlaceholder(new Label("Select a component to see assigned platforms"));
+            connectionAssignmentTable.getColumns().addAll(
+                    makeColumn("Device Type", PoliciesParser.ComponentAssignmentEntry::platformId, 160),
+                    makeColumn("Policy", PoliciesParser.ComponentAssignmentEntry::policyId, 120),
+                    makeColumn("Component", PoliciesParser.ComponentAssignmentEntry::componentId, 160),
+                    makeColumn("Component Enabled", PoliciesParser.ComponentAssignmentEntry::componentEnabled, 110),
+                    makeColumn("Overwrites", PoliciesParser.ComponentAssignmentEntry::hasOverrides, 90)
+            );
+
+            // Add double-click handler for connection assignments
+            connectionAssignmentTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.ComponentAssignmentEntry> row = new TableRow<>();
+                row.setOnMouseClicked(event -> {
+                    if (row.isEmpty() || event.getClickCount() != 2) {
+                        return;
+                    }
+                    // Double-click would show policy details
+                    // This could be extended to show component or policy details
+                });
+                return row;
+            });
+
             VBox.setVgrow(connectionComponentTable, Priority.ALWAYS);
-            connectionComponentContent.getChildren().add(connectionComponentTable);
+            VBox.setVgrow(connectionAssignmentTable, Priority.ALWAYS);
+
+            SplitPane split = new SplitPane(connectionComponentTable, connectionAssignmentTable);
+            split.setDividerPositions(0.62);
+            VBox.setVgrow(split, Priority.ALWAYS);
+            connectionComponentContent.getChildren().add(split);
 
         }
         return connectionComponentContent;
+    }
+
+    private VBox getPoliciesContent() {
+        if (policiesContent == null) {
+            policiesContent = new VBox(6);
+            policiesContent.getStyleClass().add("content-pane");
+
+            policiesTable = new TableView<>();
+            policiesTable.getStyleClass().add("modern-table");
+            policiesTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            policiesTable.setPlaceholder(new Label("No policies loaded"));
+            policiesTable.getColumns().addAll(
+                    makeColumn("Device Type", PoliciesParser.PolicyEntry::platformId, 130),
+                    makeColumn("Policy ID", PoliciesParser.PolicyEntry::policyId, 130),
+                    makeColumn("Policy Name", PoliciesParser.PolicyEntry::policyName, 170),
+                    makeColumn("Policy Enabled", PoliciesParser.PolicyEntry::policyEnabled, 100),
+                    makeColumn("Component Assigned", PoliciesParser.PolicyEntry::componentAssigned, 110),
+                    makeColumn("Overwrites", PoliciesParser.PolicyEntry::hasOverrides, 90)
+            );
+
+            policiesTable.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
+                if (newVal != null) {
+                    onPolicyRowSelected.accept(newVal);
+                }
+            });
+
+            policiesTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.PolicyEntry> row = new TableRow<>();
+                row.setOnMouseClicked(event -> {
+                    if (!row.isEmpty() && event.getClickCount() == 2) {
+                        onPolicyRowDoubleClicked.accept(row.getItem());
+                    }
+                });
+                return row;
+            });
+
+            policyAssignmentsTable = new TableView<>();
+            policyAssignmentsTable.getStyleClass().add("modern-table");
+            policyAssignmentsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            policyAssignmentsTable.setPlaceholder(new Label("Select a policy to see assigned connection components"));
+            policyAssignmentsTable.getColumns().addAll(
+                    makeColumn("Component", PoliciesParser.ComponentAssignmentEntry::componentId, 160),
+                    makeColumn("Component Enabled", PoliciesParser.ComponentAssignmentEntry::componentEnabled, 110),
+                    makeColumn("Overwrites", PoliciesParser.ComponentAssignmentEntry::hasOverrides, 90)
+            );
+
+            SplitPane split = new SplitPane(policiesTable, policyAssignmentsTable);
+            split.setDividerPositions(0.68);
+            VBox.setVgrow(split, Priority.ALWAYS);
+            policiesContent.getChildren().add(split);
+        }
+        return policiesContent;
+    }
+
+    private VBox getTargetsContent() {
+        if (targetsContent == null) {
+            targetsContent = new VBox(4);
+            targetsContent.getStyleClass().add("content-pane");
+
+            targetsTable = new TableView<>();
+            targetsTable.getStyleClass().add("modern-table");
+            targetsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            targetsTable.setPlaceholder(new Label("No targets loaded"));
+            targetsTable.getColumns().addAll(
+                    makeColumn("Effective Address", PoliciesParser.TargetEntry::effectiveAddress, 220),
+                    makeColumn("Source Address", PoliciesParser.TargetEntry::sourceAddress, 220),
+                    makeColumn("Altered Address", PoliciesParser.TargetEntry::alteredAddress, 220),
+                    makeColumn("Device Type", PoliciesParser.TargetEntry::platformId, 140),
+                    makeColumn("Policy", PoliciesParser.TargetEntry::policyId, 140)
+            );
+
+            VBox.setVgrow(targetsTable, Priority.ALWAYS);
+            targetsContent.getChildren().add(targetsTable);
+        }
+        return targetsContent;
+    }
+
+    private VBox getUsagesContent() {
+        if (usageContent == null) {
+            usageContent = new VBox(6);
+            usageContent.getStyleClass().add("content-pane");
+
+            usageTable = new TableView<>();
+            usageTable.getStyleClass().add("modern-table");
+            usageTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            usageTable.setPlaceholder(new Label("No usages loaded"));
+            usageTable.getColumns().addAll(
+                    makeColumn("Usage ID", PoliciesParser.usageEntry::usageId, 150),
+                    makeColumn("Device Type", PoliciesParser.usageEntry::platformBaseType, 150),
+                    makeColumn("Platform Base ID", PoliciesParser.usageEntry::platformBaseId, 170),
+                    makeColumn("Platform Protocol", PoliciesParser.usageEntry::platformBaseProtocol, 160),
+                    makeColumn("Policy Count", PoliciesParser.usageEntry::policyCount, 100)
+            );
+
+            usageTable.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
+                if (newVal != null) {
+                    onUsageRowSelected.accept(newVal);
+                }
+            });
+
+            usagePolicyAssignmentsTable = new TableView<>();
+            usagePolicyAssignmentsTable.getStyleClass().add("modern-table");
+            usagePolicyAssignmentsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            usagePolicyAssignmentsTable.setPlaceholder(new Label("Select a usage to see matching policies"));
+            usagePolicyAssignmentsTable.getColumns().addAll(
+                    makeColumn("Policy ID", PoliciesParser.UsagePolicyEntry::policyId, 150),
+                    makeColumn("Platform Base ID", PoliciesParser.UsagePolicyEntry::platformBaseId, 150),
+                    makeColumn("Connection Components", PoliciesParser.UsagePolicyEntry::componentIds, 260),
+                    makeColumn("Overwrites", PoliciesParser.UsagePolicyEntry::hasOverrides, 90)
+            );
+
+            // Add double-click handler for usage policy assignments
+            usagePolicyAssignmentsTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.UsagePolicyEntry> row = new TableRow<>();
+                row.setOnMouseClicked(event -> {
+                    if (row.isEmpty() || event.getClickCount() != 2) {
+                        return;
+                    }
+                    // Double-click would show policy details
+                });
+                return row;
+            });
+
+            SplitPane split = new SplitPane(usageTable, usagePolicyAssignmentsTable);
+            split.setDividerPositions(0.62);
+            VBox.setVgrow(split, Priority.ALWAYS);
+            usageContent.getChildren().add(split);
+        }
+        return usageContent;
     }
 
     private VBox getPsmContent() {
@@ -415,15 +678,51 @@ public class UI {
         if (connectionComponentTable != null) {
             connectionComponentTable.setItems(FXCollections.observableArrayList());
         }
+        if (connectionAssignmentTable != null) {
+            connectionAssignmentTable.setItems(FXCollections.observableArrayList());
+        }
+        if (policyAssignmentsTable != null) {
+            policyAssignmentsTable.setItems(FXCollections.observableArrayList());
+        }
         if (psmTable != null) {
             psmTable.setItems(FXCollections.observableArrayList());
         }
         if (psmpTable != null) {
             psmpTable.setItems(FXCollections.observableArrayList());
         }
+        if (policiesTable != null) {
+            policiesTable.setItems(FXCollections.observableArrayList());
+        }
         if (usageTable != null) {
             usageTable.setItems(FXCollections.observableArrayList());
         }
+        if (usagePolicyAssignmentsTable != null) {
+            usagePolicyAssignmentsTable.setItems(FXCollections.observableArrayList());
+        }
+        if (targetsTable != null) {
+            targetsTable.setItems(FXCollections.observableArrayList());
+        }
+    }
+
+    void setConnectionAssignments(List<PoliciesParser.ComponentAssignmentEntry> rows) {
+        if (connectionAssignmentTable == null) {
+            return;
+        }
+        connectionAssignmentTable.setItems(FXCollections.observableArrayList(rows == null ? List.of() : rows));
+    }
+
+    void setPolicyAssignments(List<PoliciesParser.ComponentAssignmentEntry> rows) {
+        if (policyAssignmentsTable == null) {
+            return;
+        }
+        policyAssignmentsTable.setItems(FXCollections.observableArrayList(rows == null ? List.of() : rows));
+    }
+
+    void setUsagePolicyAssignments(List<PoliciesParser.UsagePolicyEntry> rows) {
+        if (usagePolicyAssignmentsTable == null) {
+            return;
+        }
+        usagePolicyAssignmentsTable.setItems(FXCollections.observableArrayList(rows == null ? List.of() : rows));
     }
 
     void showToast(String message) {
@@ -775,16 +1074,21 @@ public class UI {
         if ("Connection Components".equals(text)) {
             root.setCenter(getConnectionComponentContent());
             onConnectionComponentTabSelected.run();
+        } else if ("Policies".equals(text)) {
+            root.setCenter(getPoliciesContent());
+            onPoliciesTabSelected.run();
+        } else if ("Usages".equals(text)) {
+            root.setCenter(getUsagesContent());
+            onUsagesTabSelected.run();
         } else if ("PSMs".equals(text)) {
             root.setCenter(getPsmContent());
             onPsmTabSelected.run();
         } else if ("PSMPs".equals(text)) {
             root.setCenter(getPsmpContent());
             onPsmpTabSelected.run();
-        } else if ("Platforms".equals(text)) {
-            root.setCenter(createPlatformsContent());
         } else if ("Targets".equals(text)) {
-            root.setCenter(createTargetsContent());
+            root.setCenter(getTargetsContent());
+            onTargetsTabSelected.run();
         }
     }
 
@@ -1132,5 +1436,9 @@ public class UI {
         return !displayNameField.getText().isBlank()
                 || !shortLabelField.getText().isBlank()
                 || !folderPathField.getText().isBlank();
+    }
+
+    private String blankAsNone(String value) {
+        return value == null || value.isBlank() ? "(none)" : value;
     }
 }
