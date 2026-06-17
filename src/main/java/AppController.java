@@ -18,6 +18,7 @@ import java.nio.file.attribute.FileTime;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -31,12 +32,15 @@ public class AppController {
     private final AppSettings settings;
     private final Consumer<String> onLoadError;
     private final PVConfigurationParser pvParser = new PVConfigurationParser();
+    private final PoliciesParser policiesParser = new PoliciesParser();
     private final Map<String, EnvironmentLoadState> environmentLoadStates = new HashMap<>();
 
     private boolean connectionComponentLoaded;
     private boolean psmpLoaded;
     private boolean psmLoaded;
     private boolean usagesLoaded;
+    private boolean policiesLoaded;
+    private boolean targetsLoaded;
 
     public AppController(UI ui, AppSettings settings, Consumer<String> onLoadError) {
         this.ui = ui;
@@ -58,6 +62,8 @@ public class AppController {
         psmpLoaded = false;
         psmLoaded = false;
         usagesLoaded = false;
+        policiesLoaded = false;
+        targetsLoaded = false;
         ui.clearDataTables();
         refreshStatusIndicators();
     }
@@ -68,10 +74,14 @@ public class AppController {
                 || "PSMs".equals(selectedTab)
                 || "PSMPs".equals(selectedTab)) {
             invalidatePvDataForActiveEnvironment();
-        } else if ("Usage".equals(selectedTab)) {
+        } else if ("Usage".equals(selectedTab)
+                || "Usages".equals(selectedTab)
+                || "Policies".equals(selectedTab)
+                || "Targets".equals(selectedTab)
+                || "Platforms".equals(selectedTab)) {
             invalidatePoliciesDataForActiveEnvironment();
         } else {
-            onLoadError.accept("Update Current works on data tabs (Connection Components, PSMs, PSMPs, Usage).");
+            onLoadError.accept("Update Current works on data tabs (Connection Components, Policies, Targets, Usages, PSMs, PSMPs).");
             refreshStatusIndicators();
             return;
         }
@@ -215,6 +225,113 @@ public class AppController {
         }
     }
 
+    public void loadPoliciesIfNeeded() {
+        if (policiesLoaded || ui.getPoliciesTable() == null) {
+            return;
+        }
+
+        try {
+            String policiesPath = getActivePoliciesPath();
+            ObservableList<PoliciesParser.PolicyEntry> masterData =
+                    FXCollections.observableArrayList(policiesParser.getPolicies(policiesPath));
+            wireFiltering(ui.getPoliciesTable(), masterData);
+            policiesLoaded = true;
+            markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+            refreshStatusIndicators();
+        } catch (Exception e) {
+            reportLoadError("Policies", e);
+        }
+    }
+
+    public void loadTargetsIfNeeded() {
+        if (targetsLoaded || ui.getTargetsTable() == null) {
+            return;
+        }
+
+        try {
+            String pvConfigPath = getActivePvConfigurationPath();
+            ObservableList<PoliciesParser.TargetEntry> masterData =
+                    FXCollections.observableArrayList(policiesParser.getTargets(pvConfigPath));
+            wireFiltering(ui.getTargetsTable(), masterData);
+            targetsLoaded = true;
+            markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+            refreshStatusIndicators();
+        } catch (Exception e) {
+            reportLoadError("Targets", e);
+        }
+    }
+
+    public void onConnectionComponentSelected(PVConfigurationParser.ConnectionComponentEntry entry) {
+        if (entry == null) {
+            ui.setConnectionAssignments(List.of());
+            return;
+        }
+
+        try {
+            String policiesPath = getActivePoliciesPath();
+            ui.setConnectionAssignments(policiesParser.getAssignmentsForConnectionComponent(policiesPath, entry.id()));
+            markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+            refreshStatusIndicators();
+        } catch (Exception e) {
+            ui.setConnectionAssignments(List.of());
+            reportLoadError("component assignments", e);
+        }
+    }
+
+    public void onPolicySelected(PoliciesParser.PolicyEntry policy) {
+        if (policy == null) {
+            ui.setPolicyAssignments(List.of());
+            return;
+        }
+
+        try {
+            String policiesPath = getActivePoliciesPath();
+            ui.setPolicyAssignments(policiesParser.getComponentsForPolicy(policiesPath, policy.policyId()));
+        } catch (Exception e) {
+            ui.setPolicyAssignments(List.of());
+            reportLoadError("policy components", e);
+        }
+    }
+
+    public void onUsageSelected(PoliciesParser.usageEntry usage) {
+        if (usage == null) {
+            ui.setUsagePolicyAssignments(List.of());
+            return;
+        }
+
+        try {
+            String policiesPath = getActivePoliciesPath();
+            ui.setUsagePolicyAssignments(policiesParser.getPoliciesForUsage(policiesPath, usage.usageId()));
+        } catch (Exception e) {
+            ui.setUsagePolicyAssignments(List.of());
+            reportLoadError("usage policies", e);
+        }
+    }
+
+    public void showPolicyDetails(PoliciesParser.PolicyEntry policy) {
+        if (policy == null || policy.details() == null) {
+            return;
+        }
+
+        TextArea detailsArea = new TextArea(formatConnectionComponentDetails(policy.details()));
+        detailsArea.getStyleClass().add("code-area");
+        detailsArea.setEditable(false);
+        detailsArea.setWrapText(false);
+
+        BorderPane root = new BorderPane(detailsArea);
+        root.getStyleClass().add("details-popup");
+        Label title = new Label("Policy: " + policy.policyId());
+        title.getStyleClass().add("details-title");
+        root.setTop(title);
+
+        Stage popup = new Stage();
+        popup.setTitle("Policy Details");
+        Scene scene = new Scene(root, 900, 700);
+        ui.applyTheme(scene);
+        popup.setScene(scene);
+        popup.show();
+    }
+
     private void reportLoadError(String target, Exception error) {
         AppSettings.SourceProfile profile = settings.getActiveProfile();
         String profileName = profile == null || profile.displayName() == null || profile.displayName().isBlank()
@@ -268,9 +385,20 @@ public class AppController {
 
     private void invalidatePoliciesDataForActiveEnvironment() {
         usagesLoaded = false;
+        policiesLoaded = false;
+        targetsLoaded = false;
         if (ui.getUsageTable() != null) {
             ui.getUsageTable().setItems(FXCollections.observableArrayList());
         }
+        if (ui.getPoliciesTable() != null) {
+            ui.getPoliciesTable().setItems(FXCollections.observableArrayList());
+        }
+        if (ui.getTargetsTable() != null) {
+            ui.getTargetsTable().setItems(FXCollections.observableArrayList());
+        }
+        ui.setPolicyAssignments(List.of());
+        ui.setUsagePolicyAssignments(List.of());
+        ui.setConnectionAssignments(List.of());
 
         AppSettings.SourceProfile profile = settings.getActiveProfile();
         if (profile != null) {
@@ -341,8 +469,12 @@ public class AppController {
             loadPSMServersIfNeeded();
         } else if ("PSMPs".equals(selectedTab)) {
             loadPSMPServersIfNeeded();
-        } else if ("Usage".equals(selectedTab)) {
+        } else if ("Policies".equals(selectedTab)) {
+            loadPoliciesIfNeeded();
+        } else if ("Usages".equals(selectedTab)) {
             loadUsageIfNeeded();
+        } else if ("Targets".equals(selectedTab)) {
+            loadTargetsIfNeeded();
         } else {
             loadConnectionComponentIfNeeded();
         }
