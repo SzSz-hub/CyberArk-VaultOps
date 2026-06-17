@@ -2,12 +2,15 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.animation.KeyFrame;
 import javafx.animation.PauseTransition;
+import javafx.animation.Timeline;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.input.ClipboardContent;
@@ -40,12 +43,23 @@ public class UI {
     private Menu themeMenu;
     private boolean suppressSideNavCallbacks;
 
+    private static final Runnable NO_OP = () -> {};
+    private static final Duration STATUS_POLL_INTERVAL = Duration.seconds(20);
+    private Runnable onPsmTabSelected = NO_OP;
+    private Runnable onSourceProfileChanged = NO_OP;
+    private Runnable onPsmpTabSelected = NO_OP;
+    private Runnable onUsageSelected = NO_OP;
+    private Runnable onConnectionComponentTabSelected = NO_OP;
+    private Runnable onRefreshCurrentRequested = NO_OP;
+    private Runnable onReloadAllRequested = NO_OP;
+    private Runnable onStatusRefreshRequested = NO_OP;
+
+    private static Runnable safeRunnable(Runnable runnable) {
+        return runnable == null ? NO_OP : runnable;
+    }
+
     private TableView<PVConfigurationParser.PSMServerEntry> psmTable;
     private VBox psmContent;
-    private Runnable onPsmTabSelected = () -> {
-    };
-    private Runnable onSourceProfileChanged = () -> {
-    };
 
     UI(AppSettings settings, AppSettingsStore settingsStore) {
         this.settings = settings;
@@ -54,7 +68,7 @@ public class UI {
     }
 
     void setOnSourceProfileChanged(Runnable onSourceProfileChanged) {
-        this.onSourceProfileChanged = onSourceProfileChanged == null ? () -> {} : onSourceProfileChanged;
+        this.onSourceProfileChanged = safeRunnable(onSourceProfileChanged);
     }
 
     TableView<PVConfigurationParser.PSMServerEntry> getPsmTable() {
@@ -62,28 +76,34 @@ public class UI {
     }
 
     void setOnPsmTabSelected(Runnable onPsmTabSelected) {
-        this.onPsmTabSelected = onPsmTabSelected == null ? () -> {
-        } : onPsmTabSelected;
+        this.onPsmTabSelected = safeRunnable(onPsmTabSelected);
     }
 
     private TableView<PVConfigurationParser.PSMPServerEntry> psmpTable;
     private VBox psmpContent;
-    private Runnable onPsmpTabSelected = () -> {
-    };
 
     TableView<PVConfigurationParser.PSMPServerEntry> getPsmpTable() {
         return psmpTable;
     }
 
     void setOnPsmpTabSelected(Runnable onPsmpTabSelected) {
-        this.onPsmpTabSelected = onPsmpTabSelected == null ? () -> {
-        } : onPsmpTabSelected;
+        this.onPsmpTabSelected = safeRunnable(onPsmpTabSelected);
+    }
+
+    private TableView<PoliciesParser.usageEntry> usageTable;
+    private VBox usageContent;
+
+    TableView<PoliciesParser.usageEntry> getUsageTable() {
+        return usageTable;
+    }
+
+    void setOnUsageSelected(Runnable onUsageSelected) {
+        this.onUsageSelected = safeRunnable(onUsageSelected);
     }
 
     private TableView<PVConfigurationParser.ConnectionComponentEntry> connectionComponentTable;
     private VBox connectionComponentContent;
-    private Runnable onConnectionComponentTabSelected = () -> {
-    };
+
     private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowSelected = entry -> {
     };
 
@@ -92,8 +112,7 @@ public class UI {
     }
 
     void setOnConnectionComponentTabSelected(Runnable onConnectionComponentTabSelected) {
-        this.onConnectionComponentTabSelected = onConnectionComponentTabSelected == null ? () -> {
-        } : onConnectionComponentTabSelected;
+        this.onConnectionComponentTabSelected = safeRunnable(onConnectionComponentTabSelected);
     }
 
     void setOnConnectionComponentRowSelected(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowSelected) {
@@ -101,7 +120,23 @@ public class UI {
         } : onConnectionComponentRowSelected;
     }
 
+    void setOnRefreshCurrentRequested(Runnable onRefreshCurrentRequested) {
+        this.onRefreshCurrentRequested = safeRunnable(onRefreshCurrentRequested);
+    }
+
+    void setOnReloadAllRequested(Runnable onReloadAllRequested) {
+        this.onReloadAllRequested = safeRunnable(onReloadAllRequested);
+    }
+
+    void setOnStatusRefreshRequested(Runnable onStatusRefreshRequested) {
+        this.onStatusRefreshRequested = safeRunnable(onStatusRefreshRequested);
+    }
+
     private TabPane tabPane;
+    private Timeline statusPoller;
+    private Label sourceStatusLabel;
+    private Label pvLoadStatusLabel;
+    private Label policiesLoadStatusLabel;
 
     void setupUI(Stage stage) {
         this.primaryStage = stage;
@@ -148,7 +183,9 @@ public class UI {
         mainScene = new Scene(sceneRoot, 900, 600);
         applyTheme(mainScene);
         stage.setScene(mainScene);
+        stage.setOnCloseRequest(event -> stopStatusPolling());
         stage.show();
+        startStatusPolling();
     }
 
     private VBox createTopBar() {
@@ -341,14 +378,36 @@ public class UI {
 
 
     private HBox createStatusBar() {
-        HBox statusBar = new HBox(16);
+        HBox statusBar = new HBox(10);
         statusBar.getStyleClass().add("status-bar");
         statusBar.setPadding(new Insets(6));
 
-        Label lastUpdate = new Label("Last update time: 2026-05-06 11:34");
-        Button updateBtn = new Button("Update");
+        sourceStatusLabel = new Label("Source: none");
+        sourceStatusLabel.getStyleClass().add("status-source-label");
 
-        statusBar.getChildren().addAll(lastUpdate, updateBtn);
+        pvLoadStatusLabel = new Label("PVConfiguration.xml: never loaded");
+        pvLoadStatusLabel.getStyleClass().add("status-load-label");
+
+        policiesLoadStatusLabel = new Label("Policies.xml: never loaded");
+        policiesLoadStatusLabel.getStyleClass().add("status-load-label");
+
+        Button updateBtn = new Button("Update Current");
+        updateBtn.setOnAction(event -> onRefreshCurrentRequested.run());
+
+        Button reloadAllBtn = new Button("Reload All");
+        reloadAllBtn.setOnAction(event -> onReloadAllRequested.run());
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        statusBar.getChildren().addAll(
+                sourceStatusLabel,
+                pvLoadStatusLabel,
+                policiesLoadStatusLabel,
+                spacer,
+                updateBtn,
+                reloadAllBtn
+        );
         return statusBar;
     }
 
@@ -362,13 +421,16 @@ public class UI {
         if (psmpTable != null) {
             psmpTable.setItems(FXCollections.observableArrayList());
         }
+        if (usageTable != null) {
+            usageTable.setItems(FXCollections.observableArrayList());
+        }
     }
 
     void showToast(String message) {
         if (toastContainer == null) {
             return;
         }
-        String text = (message == null || message.isBlank()) ? "Load failed." : message;
+        String text = (message == null || message.isBlank()) ? "Action finished." : message;
 
         Label toast = new Label(text);
         toast.getStyleClass().add("toast-message");
@@ -380,6 +442,55 @@ public class UI {
         PauseTransition delay = new PauseTransition(Duration.seconds(3));
         delay.setOnFinished(e -> toastContainer.getChildren().remove(toast));
         delay.play();
+    }
+
+    void refreshCurrentTabContent() {
+        reloadCurrentTab();
+    }
+
+    String getSelectedTabName() {
+        if (tabPane == null || tabPane.getSelectionModel().getSelectedItem() == null) {
+            return "";
+        }
+        return tabPane.getSelectionModel().getSelectedItem().getText();
+    }
+
+    void setLoadStatus(String sourceName, String pvLabelText, boolean pvStale, String policiesLabelText, boolean policiesStale) {
+        if (sourceStatusLabel != null) {
+            sourceStatusLabel.setText("Source: " + ((sourceName == null || sourceName.isBlank()) ? "none" : sourceName));
+        }
+        if (pvLoadStatusLabel != null) {
+            pvLoadStatusLabel.setText((pvLabelText == null || pvLabelText.isBlank()) ? "PVConfiguration.xml: never loaded" : pvLabelText);
+            setStaleStyle(pvLoadStatusLabel, pvStale);
+        }
+        if (policiesLoadStatusLabel != null) {
+            policiesLoadStatusLabel.setText((policiesLabelText == null || policiesLabelText.isBlank()) ? "Policies.xml: never loaded" : policiesLabelText);
+            setStaleStyle(policiesLoadStatusLabel, policiesStale);
+        }
+    }
+
+    private void setStaleStyle(Label label, boolean stale) {
+        if (stale) {
+            if (!label.getStyleClass().contains("status-stale")) {
+                label.getStyleClass().add("status-stale");
+            }
+        } else {
+            label.getStyleClass().remove("status-stale");
+        }
+    }
+
+    private void startStatusPolling() {
+        stopStatusPolling();
+        statusPoller = new Timeline(new KeyFrame(STATUS_POLL_INTERVAL, event -> onStatusRefreshRequested.run()));
+        statusPoller.setCycleCount(Timeline.INDEFINITE);
+        statusPoller.play();
+    }
+
+    private void stopStatusPolling() {
+        if (statusPoller != null) {
+            statusPoller.stop();
+            statusPoller = null;
+        }
     }
 
     private void applyProfilesToSidebar() {
@@ -662,11 +773,18 @@ public class UI {
         }
         String text = selectedTab.getText();
         if ("Connection Components".equals(text)) {
+            root.setCenter(getConnectionComponentContent());
             onConnectionComponentTabSelected.run();
         } else if ("PSMs".equals(text)) {
+            root.setCenter(getPsmContent());
             onPsmTabSelected.run();
         } else if ("PSMPs".equals(text)) {
+            root.setCenter(getPsmpContent());
             onPsmpTabSelected.run();
+        } else if ("Platforms".equals(text)) {
+            root.setCenter(createPlatformsContent());
+        } else if ("Targets".equals(text)) {
+            root.setCenter(createTargetsContent());
         }
     }
 
@@ -684,7 +802,7 @@ public class UI {
         TextField displayNameField = new TextField();
         TextField shortLabelField = new TextField();
         TextField folderPathField = new TextField();
-        folderPathField.setPromptText("e.g. \\\\prodserver1\\c$\\programfiles\\cyberark\\pvwa\\temp\\ or .\\prodlu\\");
+        folderPathField.setPromptText("e.g. \\\\prodserver1\\c$\\programfiles\\cyberark\\pvwa\\temp\\ or .\\prod\\");
 
         Label activeLabel = new Label();
         activeLabel.getStyleClass().add("active-source-label");
@@ -701,61 +819,28 @@ public class UI {
         };
         refreshActiveLabel.run();
 
-        final boolean[] writingSelection = {false};
-
         listView.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
-            writingSelection[0] = true;
-            if (newVal == null) {
-                displayNameField.setText("");
-                shortLabelField.setText("");
-                folderPathField.setText("");
-            } else {
-                displayNameField.setText(newVal.displayName());
-                shortLabelField.setText(newVal.shortLabel());
-                folderPathField.setText(newVal.folderPath());
-            }
-            writingSelection[0] = false;
-        });
-
-        displayNameField.textProperty().addListener((obs, oldVal, newVal) -> {
-            if (writingSelection[0]) {
-                return;
-            }
-            AppSettings.SourceProfile selected = listView.getSelectionModel().getSelectedItem();
-            if (selected != null) {
-                selected.setDisplayName(newVal);
-                listView.refresh();
-                refreshActiveLabel.run();
-            }
-        });
-
-        shortLabelField.textProperty().addListener((obs, oldVal, newVal) -> {
-            if (writingSelection[0]) {
-                return;
-            }
-            AppSettings.SourceProfile selected = listView.getSelectionModel().getSelectedItem();
-            if (selected != null) {
-                selected.setShortLabel(newVal);
-                listView.refresh();
-            }
-        });
-
-        folderPathField.textProperty().addListener((obs, oldVal, newVal) -> {
-            if (writingSelection[0]) {
-                return;
-            }
-            AppSettings.SourceProfile selected = listView.getSelectionModel().getSelectedItem();
-            if (selected != null) {
-                selected.setFolderPath(newVal);
-                listView.refresh();
-            }
+            fillProfileForm(newVal, displayNameField, shortLabelField, folderPathField);
         });
 
         Button browseButton = new Button("Browse...");
+        final File[] lastBrowsedDirectory = {existingDirectory(folderPathField.getText())};
         browseButton.setOnAction(event -> {
             DirectoryChooser chooser = new DirectoryChooser();
+            File initialDirectory = existingDirectory(folderPathField.getText());
+            if (initialDirectory == null) {
+                initialDirectory = lastBrowsedDirectory[0];
+            }
+            if (initialDirectory == null) {
+                AppSettings.SourceProfile activeProfile = settings.getActiveProfile();
+                initialDirectory = existingDirectory(activeProfile == null ? "" : activeProfile.folderPath());
+            }
+            if (initialDirectory != null) {
+                chooser.setInitialDirectory(initialDirectory);
+            }
             File selectedDirectory = chooser.showDialog(dialog);
             if (selectedDirectory != null) {
+                lastBrowsedDirectory[0] = selectedDirectory;
                 folderPathField.setText(selectedDirectory.getPath());
             }
         });
@@ -766,9 +851,17 @@ public class UI {
                 showToast("Maximum 10 source profiles are allowed.");
                 return;
             }
+
             AppSettings.SourceProfile profile = AppSettingsStore.newProfile("New Source");
+            applyFormToProfile(profile, displayNameField, shortLabelField, folderPathField);
+            if (profile.displayName() == null || profile.displayName().isBlank()) {
+                profile.setDisplayName("New Source");
+            }
+
             draftProfiles.add(profile);
             listView.getSelectionModel().select(profile);
+            listView.refresh();
+            refreshActiveLabel.run();
         });
 
         Button removeButton = new Button("Remove");
@@ -793,11 +886,31 @@ public class UI {
             }
         });
 
-        Button saveButton = new Button("Save");
-        saveButton.setOnAction(event -> {
+        java.util.function.Function<Boolean, Boolean> persistDraftProfiles = closeAfterSave -> {
+            AppSettings.SourceProfile selected = listView.getSelectionModel().getSelectedItem();
+            if (selected != null) {
+                applyFormToProfile(selected, displayNameField, shortLabelField, folderPathField);
+                listView.refresh();
+                refreshActiveLabel.run();
+            } else if (hasAnyFormValue(displayNameField, shortLabelField, folderPathField)) {
+                if (draftProfiles.size() >= AppSettings.MAX_SOURCES) {
+                    showToast("Maximum 10 source profiles are allowed.");
+                    return false;
+                }
+                AppSettings.SourceProfile profile = AppSettingsStore.newProfile("New Source");
+                applyFormToProfile(profile, displayNameField, shortLabelField, folderPathField);
+                if (profile.displayName() == null || profile.displayName().isBlank()) {
+                    profile.setDisplayName("New Source");
+                }
+                draftProfiles.add(profile);
+                listView.getSelectionModel().select(profile);
+                listView.refresh();
+                refreshActiveLabel.run();
+            }
+
             if (draftProfiles.isEmpty()) {
                 showToast("At least one source profile is required.");
-                return;
+                return false;
             }
             for (AppSettings.SourceProfile profile : draftProfiles) {
                 if (profile.displayName() == null || profile.displayName().isBlank()) {
@@ -811,8 +924,20 @@ public class UI {
             applyProfilesToSidebar();
             onSourceProfileChanged.run();
             reloadCurrentTab();
-            dialog.close();
-        });
+
+            if (closeAfterSave) {
+                dialog.close();
+            } else {
+                showToast("Source settings saved.");
+            }
+            return true;
+        };
+
+        Button applyButton = new Button("Apply");
+        applyButton.setOnAction(event -> persistDraftProfiles.apply(false));
+
+        Button saveButton = new Button("Save & Close");
+        saveButton.setOnAction(event -> persistDraftProfiles.apply(true));
 
         Button cancelButton = new Button("Cancel");
         cancelButton.setOnAction(event -> dialog.close());
@@ -834,7 +959,7 @@ public class UI {
         form.getStyleClass().add("settings-form");
         form.setPadding(new Insets(6));
 
-        HBox buttons = new HBox(8, addButton, removeButton, saveButton, cancelButton);
+        HBox buttons = new HBox(8, addButton, removeButton, applyButton, saveButton, cancelButton);
         buttons.getStyleClass().add("dialog-actions");
         buttons.setAlignment(Pos.CENTER_RIGHT);
 
@@ -969,5 +1094,43 @@ public class UI {
         col.setUserData(filterField);
 
         return col;
+    }
+
+    private File existingDirectory(String directoryPath) {
+        if (directoryPath == null || directoryPath.isBlank()) {
+            return null;
+        }
+        File file = new File(directoryPath);
+        if (!file.exists()) {
+            return null;
+        }
+        return file.isDirectory() ? file : file.getParentFile();
+    }
+
+    private void fillProfileForm(AppSettings.SourceProfile profile, TextField displayNameField, TextField shortLabelField, TextField folderPathField) {
+        if (profile == null) {
+            displayNameField.setText("");
+            shortLabelField.setText("");
+            folderPathField.setText("");
+            return;
+        }
+        displayNameField.setText(profile.displayName() == null ? "" : profile.displayName());
+        shortLabelField.setText(profile.shortLabel() == null ? "" : profile.shortLabel());
+        folderPathField.setText(profile.folderPath() == null ? "" : profile.folderPath());
+    }
+
+    private void applyFormToProfile(AppSettings.SourceProfile profile, TextField displayNameField, TextField shortLabelField, TextField folderPathField) {
+        if (profile == null) {
+            return;
+        }
+        profile.setDisplayName(displayNameField.getText());
+        profile.setShortLabel(shortLabelField.getText());
+        profile.setFolderPath(folderPathField.getText());
+    }
+
+    private boolean hasAnyFormValue(TextField displayNameField, TextField shortLabelField, TextField folderPathField) {
+        return !displayNameField.getText().isBlank()
+                || !shortLabelField.getText().isBlank()
+                || !folderPathField.getText().isBlank();
     }
 }
