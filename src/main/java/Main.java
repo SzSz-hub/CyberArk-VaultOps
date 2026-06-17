@@ -18,6 +18,10 @@ public class Main extends Application {
         ui.setOnConnectionComponentTabSelected(controller::loadConnectionComponentIfNeeded);
         ui.setOnConnectionComponentRowSelected(controller::showConnectionComponentDetails);
         ui.setOnSourceProfileChanged(controller::onSourceProfileChanged);
+        ui.setOnUsageSelected(controller::loadUsageIfNeeded);
+        ui.setOnRefreshCurrentRequested(controller::invalidateCurrentSelection);
+        ui.setOnReloadAllRequested(controller::invalidateAllSourcesForActiveEnvironment);
+        ui.setOnStatusRefreshRequested(controller::refreshStatusIndicators);
         ui.setupUI(stage);
         controller.loadAll();
     }
