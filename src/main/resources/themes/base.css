@@ -108,6 +108,19 @@
     -fx-spacing: 12;
 }
 
+.status-source-label {
+    -fx-font-weight: 700;
+}
+
+.status-load-label {
+    -fx-text-fill: -app-subtle-text;
+}
+
+.status-stale {
+    -fx-text-fill: #cf3f3f;
+    -fx-font-weight: 700;
+}
+
 .side-nav {
     -fx-background-color: -app-surface;
     -fx-border-color: transparent -app-border transparent transparent;
@@ -301,4 +314,3 @@
     -fx-padding: 8;
     -fx-spacing: 8;
 }
-
