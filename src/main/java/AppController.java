@@ -49,6 +49,8 @@ public class AppController {
 
     private final Map<TableView<?>, FilterBinding> filterBindings = new IdentityHashMap<>();
 
+    private final Map<String, Stage> detailWindows = new HashMap<>();
+
     private boolean connectionComponentLoaded;
     private boolean psmpLoaded;
     private boolean psmLoaded;
@@ -186,23 +188,11 @@ public class AppController {
             return;
         }
 
-        TextArea detailsArea = new TextArea(formatConnectionComponentDetails(entry.details()));
-        detailsArea.getStyleClass().add("code-area");
-        detailsArea.setEditable(false);
-        detailsArea.setWrapText(false);
-
-        BorderPane root = new BorderPane(detailsArea);
-        root.getStyleClass().add("details-popup");
-        Label title = new Label("Connection Component: " + entry.id());
-        title.getStyleClass().add("details-title");
-        root.setTop(title);
-
-        Stage popup = new Stage();
-        popup.setTitle("Connection Component Details");
-        Scene scene = new Scene(root, 900, 700);
-        ui.applyTheme(scene);
-        popup.setScene(scene);
-        popup.show();
+        showDetailWindow(
+                "CC|" + activeSourceName() + "|" + entry.id(),
+                "Connection Component Details",
+                "Connection Component: " + entry.id(),
+                formatConnectionComponentDetails(entry.details()));
     }
 
     public void loadConnectionComponentIfNeeded() {
@@ -494,23 +484,11 @@ public class AppController {
             return;
         }
 
-        TextArea detailsArea = new TextArea(formatConnectionComponentDetails(policy.details()));
-        detailsArea.getStyleClass().add("code-area");
-        detailsArea.setEditable(false);
-        detailsArea.setWrapText(false);
-
-        BorderPane root = new BorderPane(detailsArea);
-        root.getStyleClass().add("details-popup");
-        Label title = new Label("Policy: " + policy.policyId());
-        title.getStyleClass().add("details-title");
-        root.setTop(title);
-
-        Stage popup = new Stage();
-        popup.setTitle("Policy Details");
-        Scene scene = new Scene(root, 900, 700);
-        ui.applyTheme(scene);
-        popup.setScene(scene);
-        popup.show();
+        showDetailWindow(
+                "POLICY|" + activeSourceName() + "|" + policy.policyId(),
+                "Policy Details",
+                "Policy: " + policy.policyId(),
+                formatConnectionComponentDetails(policy.details()));
     }
 
     public void showUsageDetails(PoliciesParser.usageEntry usage) {
@@ -518,23 +496,11 @@ public class AppController {
             return;
         }
 
-        TextArea detailsArea = new TextArea(formatConnectionComponentDetails(usage.children().get(0)));
-        detailsArea.getStyleClass().add("code-area");
-        detailsArea.setEditable(false);
-        detailsArea.setWrapText(false);
-
-        BorderPane root = new BorderPane(detailsArea);
-        root.getStyleClass().add("details-popup");
-        Label title = new Label("Usage: " + usage.usageId());
-        title.getStyleClass().add("details-title");
-        root.setTop(title);
-
-        Stage popup = new Stage();
-        popup.setTitle("Usage Details");
-        Scene scene = new Scene(root, 900, 700);
-        ui.applyTheme(scene);
-        popup.setScene(scene);
-        popup.show();
+        showDetailWindow(
+                "USAGE|" + activeSourceName() + "|" + usage.usageId(),
+                "Usage Details",
+                "Usage: " + usage.usageId(),
+                formatConnectionComponentDetails(usage.children().get(0)));
     }
 
     public void showConnectionAssignmentDetails(PoliciesParser.ComponentAssignmentEntry entry) {
@@ -575,6 +541,53 @@ public class AppController {
         } catch (Exception e) {
             reportLoadError("policy details", e);
         }
+    }
+
+    private void showDetailWindow(String key, String windowTitle, String headerText, String detailsContent) {
+        Stage existing = detailWindows.get(key);
+        if (existing != null) {
+            existing.toFront();
+            existing.requestFocus();
+            return;
+        }
+
+        String sourceName = activeSourceName();
+
+        TextArea detailsArea = new TextArea(detailsContent);
+        detailsArea.getStyleClass().add("code-area");
+        detailsArea.setEditable(false);
+        detailsArea.setWrapText(false);
+
+        Label title = new Label(headerText);
+        title.getStyleClass().add("details-title");
+        Label sourceLabel = new Label("Source: " + sourceName);
+        sourceLabel.getStyleClass().add("details-source");
+        javafx.scene.layout.VBox header = new javafx.scene.layout.VBox(2, title, sourceLabel);
+        header.getStyleClass().add("details-header");
+
+        BorderPane root = new BorderPane(detailsArea);
+        root.getStyleClass().add("details-popup");
+        root.setTop(header);
+
+        Stage popup = new Stage();
+        popup.setTitle(sourceName + " \u2014 " + windowTitle);
+        Scene scene = new Scene(root, 900, 700);
+        ui.applyTheme(scene);
+        popup.setScene(scene);
+        popup.setOnHidden(event -> detailWindows.remove(key));
+
+        detailWindows.put(key, popup);
+        popup.show();
+    }
+
+    /** Returns the active source profile's display name, or a sensible fallback when unavailable. */
+    private String activeSourceName() {
+        AppSettings.SourceProfile profile = settings.getActiveProfile();
+        if (profile == null) {
+            return "No source";
+        }
+        String name = profile.displayName();
+        return name == null || name.isBlank() ? "Unnamed source" : name;
     }
 
     private void reportLoadError(String target, Exception error) {
