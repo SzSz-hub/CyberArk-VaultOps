@@ -49,11 +49,6 @@ public class AppController {
 
     private final Map<TableView<?>, FilterBinding> filterBindings = new IdentityHashMap<>();
 
-    /**
-     * Tracks the currently open detail popups, keyed by source + type + id, so each unique item
-     * can have at most one window. Re-opening the same item brings the existing window to the
-     * front instead of spawning a duplicate.
-     */
     private final Map<String, Stage> detailWindows = new HashMap<>();
 
     private boolean connectionComponentLoaded;
@@ -548,12 +543,6 @@ public class AppController {
         }
     }
 
-    /**
-     * Opens a read-only detail popup for the given item. At most one window per {@code key} can be
-     * open at a time: if the same item is opened again, its existing window is brought to the front
-     * instead of opening a duplicate. The window title and header both name the source the data
-     * came from, so it is clear which source profile the details belong to.
-     */
     private void showDetailWindow(String key, String windowTitle, String headerText, String detailsContent) {
         Stage existing = detailWindows.get(key);
         if (existing != null) {
