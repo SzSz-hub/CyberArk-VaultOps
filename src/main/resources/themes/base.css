@@ -286,8 +286,17 @@
 }
 
 .preview-subtitle,
-.preview-note {
+.preview-note,
+.details-source {
     -fx-text-fill: -app-subtle-text;
+}
+
+.details-source {
+    -fx-font-size: 12px;
+}
+
+.details-header {
+    -fx-padding: 0 0 10 0;
 }
 
 .details-popup,
@@ -296,9 +305,6 @@
     -fx-padding: 12;
 }
 
-.details-title {
-    -fx-padding: 0 0 10 0;
-}
 
 .code-area {
     -fx-font-family: "Consolas", "Cascadia Mono", monospace;
