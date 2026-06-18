@@ -1,18 +1,23 @@
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 public class AppSettingsStore {
     private static final String SETTINGS_FILE = "app.properties";
 
     private final Path settingsPath;
+    private Consumer<String> errorHandler = System.err::println;
 
     public AppSettingsStore() {
         this(Paths.get(SETTINGS_FILE));
@@ -22,15 +27,23 @@ public class AppSettingsStore {
         this.settingsPath = settingsPath;
     }
 
+    public void setErrorHandler(Consumer<String> errorHandler) {
+        this.errorHandler = errorHandler == null ? System.err::println : errorHandler;
+    }
+
+    private void reportError(String message) {
+        errorHandler.accept(message);
+    }
+
     public AppSettings load() {
         AppSettings settings = new AppSettings();
         Properties properties = new Properties();
 
-        if (settingsPath.toFile().exists()) {
-            try (FileInputStream in = new FileInputStream(settingsPath.toFile())) {
+        if (Files.exists(settingsPath)) {
+            try (InputStream in = Files.newInputStream(settingsPath)) {
                 properties.load(in);
             } catch (IOException e) {
-                e.printStackTrace();
+                reportError("Failed to read settings from " + settingsPath + ": " + describe(e));
             }
         }
 
@@ -40,7 +53,7 @@ public class AppSettingsStore {
         settings.setTheme(properties.getProperty("theme", AppSettings.DEFAULT_THEME));
         settings.ensureValidActiveProfile();
 
-        if (!settingsPath.toFile().exists()) {
+        if (!Files.exists(settingsPath)) {
             save(settings);
         }
 
@@ -69,10 +82,41 @@ public class AppSettingsStore {
         properties.setProperty("activeProfile", valueOrEmpty(settings.getActiveProfileId()));
         properties.setProperty("theme", valueOrEmpty(settings.getTheme()));
 
-        try (FileOutputStream out = new FileOutputStream(settingsPath.toFile())) {
-            properties.store(out, "CyberArkAdminTool settings");
+        writeAtomically(properties);
+    }
+
+    private void writeAtomically(Properties properties) {
+        Path target = settingsPath.toAbsolutePath().normalize();
+        Path directory = target.getParent();
+        if (directory == null) {
+            directory = Paths.get(".").toAbsolutePath().normalize();
+        }
+        Path tempFile = null;
+        try {
+            Files.createDirectories(directory);
+            tempFile = Files.createTempFile(directory, "app", ".properties.tmp");
+
+            try (OutputStream out = Files.newOutputStream(tempFile)) {
+                properties.store(out, "CyberArkAdminTool settings");
+            }
+
+            try {
+                Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException atomicUnsupported) {
+                // Some filesystems (e.g. certain network shares) cannot move atomically.
+                Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            tempFile = null;
         } catch (IOException e) {
-            e.printStackTrace();
+            reportError("Failed to save settings to " + target + ": " + describe(e));
+        } finally {
+            if (tempFile != null) {
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException ignored) {
+                    // Best-effort cleanup of the orphaned temp file.
+                }
+            }
         }
     }
 
@@ -112,6 +156,12 @@ public class AppSettingsStore {
             }
         }
 
+        // M4: do not silently discard profiles beyond the cap — tell the user some were dropped.
+        if (ids.size() > AppSettings.MAX_SOURCES) {
+            reportError("Only the first " + AppSettings.MAX_SOURCES + " source profiles were loaded; "
+                    + (ids.size() - AppSettings.MAX_SOURCES) + " additional profile(s) in app.properties were ignored.");
+        }
+
         return profiles;
     }
 
@@ -133,5 +183,9 @@ public class AppSettingsStore {
 
     private String valueOrEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private static String describe(Exception e) {
+        return (e.getMessage() == null || e.getMessage().isBlank()) ? e.getClass().getSimpleName() : e.getMessage();
     }
 }

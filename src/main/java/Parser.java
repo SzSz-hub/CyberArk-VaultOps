@@ -1,8 +1,14 @@
+import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,6 +16,33 @@ import java.util.Map;
 
 public class Parser {
     public record XmlNode(String name, Map<String, String> attributes, List<XmlNode> children) {
+    }
+
+    protected static DocumentBuilderFactory newSecureDocumentBuilderFactory() throws ParserConfigurationException {
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setIgnoringComments(true);
+
+        // Primary defense: forbid DOCTYPE entirely. Any document containing a DTD fails fast.
+        dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        // Defense in depth in case a parser implementation ignores the flag above.
+        dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        dbf.setXIncludeAware(false);
+        dbf.setExpandEntityReferences(false);
+        dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+
+        return dbf;
+    }
+
+    protected static Document loadSecureDocument(String xmlPath) throws Exception {
+        DocumentBuilder db = newSecureDocumentBuilderFactory().newDocumentBuilder();
+        Document doc = db.parse(new File(xmlPath));
+        doc.getDocumentElement().normalize();
+        return doc;
     }
 
     static String attr(Element element, String attrName) {

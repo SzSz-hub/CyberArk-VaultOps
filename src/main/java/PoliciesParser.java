@@ -3,9 +3,6 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -20,7 +17,6 @@ public class PoliciesParser extends Parser {
             String platformEnabled,
             String policyId,
             String policyName,
-            String policyEnabled,
             String componentAssigned,
             String hasOverrides,
             String assignedComponents,
@@ -40,11 +36,17 @@ public class PoliciesParser extends Parser {
             String platformBaseId,
             String platformBaseProtocol,
             String platformBaseType,
-            String policyCount,
+            Integer policyCount,
             List<XmlNode> children) {
     }
 
     public record TargetEntry(String effectiveAddress, String sourceAddress, String alteredAddress, String platformId, String policyId) {
+    }
+
+    public record AlteredAddressEntry(String address, Integer count) {
+    }
+
+    public record TargetDetailEntry(String platformId, String customComponent) {
     }
 
     public record UsagePolicyEntry(
@@ -72,7 +74,6 @@ public class PoliciesParser extends Parser {
                 platformId = findDeviceName(policy);
             }
 
-            String policyEnabled = boolLabel(attr(policy, "Enabled"));
             String platformEnabled = boolLabel(attr(policy, "Enabled"));
 
             List<Element> components = listConnectionComponents(policy);
@@ -93,7 +94,6 @@ public class PoliciesParser extends Parser {
                     platformEnabled,
                     policyId,
                     policyId,
-                    policyEnabled,
                     componentIds.isEmpty() ? "No" : "Yes",
                     hasOverride ? "Yes" : "No",
                     String.join(", ", componentIds),
@@ -297,7 +297,6 @@ public class PoliciesParser extends Parser {
                 }
 
                 UsageContext context = usages.computeIfAbsent(usageName, key -> new UsageContext(usageName, "", "", "", List.of()));
-                context.platforms.add(platformId);
                 context.policies.add(policyId);
             }
         }
@@ -309,7 +308,7 @@ public class PoliciesParser extends Parser {
                     context.platformBaseId,
                     context.platformBaseProtocol,
                     context.platformBaseType,
-                    Integer.toString(context.policies.size()),
+                    context.policies.size(),
                     context.children
             ));
         }
@@ -318,7 +317,6 @@ public class PoliciesParser extends Parser {
     }
 
     public List<TargetEntry> getTargets(String pvConfigurationPath) throws Exception {
-        // Read targets from PVConfiguration.xml connection components
         PVConfigurationParser pvParser = new PVConfigurationParser();
         List<PVConfigurationParser.ConnectionComponentEntry> components = pvParser.GetConnectionComponents(pvConfigurationPath);
         List<TargetEntry> targets = new ArrayList<>();
@@ -326,7 +324,6 @@ public class PoliciesParser extends Parser {
         for (PVConfigurationParser.ConnectionComponentEntry component : components) {
             String targetAddress = extractTargetFromComponentDetails(component.details());
             if (!targetAddress.isBlank()) {
-                // Store: effectiveAddress, sourceAddress, alteredAddress, platformId(componentId), policyId(empty)
                 targets.add(new TargetEntry(targetAddress, targetAddress, "", component.id(), ""));
             }
         }
@@ -334,12 +331,97 @@ public class PoliciesParser extends Parser {
         return targets;
     }
 
+    public List<AlteredAddressEntry> getAggregatedTargetsByAlteredAddress(String pvConfigurationPath) throws Exception {
+        List<TargetEntry> targets = getTargets(pvConfigurationPath);
+        Map<String, Integer> addressCounts = new LinkedHashMap<>();
+
+        for (TargetEntry target : targets) {
+            String normalizedAddress = normalizeAddress(target.effectiveAddress());
+            if (!normalizedAddress.isBlank()) {
+                addressCounts.put(normalizedAddress, addressCounts.getOrDefault(normalizedAddress, 0) + 1);
+            }
+        }
+
+        List<AlteredAddressEntry> entries = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : addressCounts.entrySet()) {
+            entries.add(new AlteredAddressEntry(entry.getKey(), entry.getValue()));
+        }
+
+        return entries;
+    }
+
+    public List<TargetDetailEntry> getTargetDetailsForAddress(String pvConfigurationPath, String address) throws Exception {
+        String normalizedSelectedAddress = normalizeAddress(address);
+        if (normalizedSelectedAddress.isBlank()) {
+            return List.of();
+        }
+
+        PVConfigurationParser pvParser = new PVConfigurationParser();
+        List<PVConfigurationParser.ConnectionComponentEntry> components = pvParser.GetConnectionComponents(pvConfigurationPath);
+        List<TargetDetailEntry> details = new ArrayList<>();
+        Set<String> uniqueRows = new LinkedHashSet<>();
+
+        for (PVConfigurationParser.ConnectionComponentEntry component : components) {
+            String normalizedAddress = normalizeAddress(extractTargetFromComponentDetails(component.details()));
+            if (!normalizedSelectedAddress.equals(normalizedAddress)) {
+                continue;
+            }
+
+            String platformOrPolicyName = component.name() == null || component.name().isBlank()
+                    ? component.id()
+                    : component.name();
+            String customComponentId = component.id() == null ? "" : component.id();
+
+            String uniqueKey = platformOrPolicyName + "\u0000" + customComponentId;
+            if (uniqueRows.add(uniqueKey)) {
+                details.add(new TargetDetailEntry(platformOrPolicyName, customComponentId));
+            }
+        }
+
+        return details;
+    }
+
+    private static String normalizeAddress(String address) {
+        if (address == null) {
+            return "";
+        }
+        return address.trim().toLowerCase(Locale.ROOT);
+    }
+
     private String extractTargetFromComponentDetails(PVConfigurationParser.XmlNode details) {
         if (details == null || details.children() == null) {
             return "";
         }
-        // Recursively search for target address fields in the component tree
+        String alternateAddress = searchForAlternateFullAddress(details);
+        if (!alternateAddress.isBlank()) {
+            return alternateAddress;
+        }
         return searchForTargetAddress(details);
+    }
+
+    private String searchForAlternateFullAddress(PVConfigurationParser.XmlNode node) {
+        if (node == null || node.children() == null) {
+            return "";
+        }
+        for (PVConfigurationParser.XmlNode child : node.children()) {
+            if (child == null) {
+                continue;
+            }
+            if ("Parameter".equalsIgnoreCase(child.name())) {
+                String name = child.attributes() == null ? "" : child.attributes().getOrDefault("Name", "");
+                if ("alternate full address:s".equalsIgnoreCase(name)) {
+                    String value = child.attributes() == null ? "" : child.attributes().getOrDefault("Value", "");
+                    if (!value.isBlank()) {
+                        return value;
+                    }
+                }
+            }
+            String nested = searchForAlternateFullAddress(child);
+            if (!nested.isBlank()) {
+                return nested;
+            }
+        }
+        return "";
     }
 
     private String searchForTargetAddress(PVConfigurationParser.XmlNode node) {
@@ -350,18 +432,16 @@ public class PoliciesParser extends Parser {
         for (PVConfigurationParser.XmlNode child : node.children()) {
             if (child == null) continue;
 
-            // Look for common target address field names
             if ("PSMRemoteMachine".equalsIgnoreCase(child.name()) ||
                 "RemoteMachine".equalsIgnoreCase(child.name()) ||
                 "TargetAddress".equalsIgnoreCase(child.name()) ||
                 "Address".equalsIgnoreCase(child.name())) {
-                String value = child.attributes() != null ? child.attributes().get("Value") : null;
-                if (value != null && !value.isBlank()) {
+                String value = child.attributes() == null ? "" : child.attributes().getOrDefault("Value", "");
+                if (!value.isBlank()) {
                     return value;
                 }
             }
 
-            // Recursively search in children
             String found = searchForTargetAddress(child);
             if (!found.isBlank()) {
                 return found;
@@ -371,14 +451,7 @@ public class PoliciesParser extends Parser {
     }
 
     private Document loadDocument(String xmlPath) throws Exception {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        dbf.setNamespaceAware(false);
-        dbf.setIgnoringComments(true);
-
-        DocumentBuilder db = dbf.newDocumentBuilder();
-        Document doc = db.parse(new File(xmlPath));
-        doc.getDocumentElement().normalize();
-        return doc;
+        return loadSecureDocument(xmlPath);
     }
 
     private static String findDeviceName(Element policyElement) {
@@ -427,50 +500,6 @@ public class PoliciesParser extends Parser {
         return result;
     }
 
-    private static String extractAddress(Element connectionComponent, boolean overrideOnly) {
-        List<String> names = List.of("PSMRemoteMachine", "RemoteMachine", "TargetAddress", "Address");
-
-        if (overrideOnly) {
-            Element overrideUser = firstDirectChild(connectionComponent, "OverrideUserParameters");
-            return findAddressInParameterContainer(overrideUser, names);
-        }
-
-        Element user = firstDirectChild(connectionComponent, "UserParameters");
-        String source = findAddressInParameterContainer(user, names);
-        if (!source.isBlank()) {
-            return source;
-        }
-
-        Element overrideUser = firstDirectChild(connectionComponent, "OverrideUserParameters");
-        return findAddressInParameterContainer(overrideUser, names);
-    }
-
-    private static String findAddressInParameterContainer(Element container, List<String> parameterNames) {
-        if (container == null) {
-            return "";
-        }
-
-        for (Element parameter : directChildElements(container, "Parameter")) {
-            String name = attr(parameter, "Name");
-            if (!containsIgnoreCase(parameterNames, name)) {
-                continue;
-            }
-            String value = attr(parameter, "Value");
-            if (!value.isBlank()) {
-                return value;
-            }
-        }
-        return "";
-    }
-
-    private static boolean containsIgnoreCase(List<String> values, String target) {
-        for (String value : values) {
-            if (value.equalsIgnoreCase(target)) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     private static boolean hasOverrides(Element connectionComponent) {
         if (firstDirectChild(connectionComponent, "OverrideUserParameters") != null) {
@@ -499,7 +528,6 @@ public class PoliciesParser extends Parser {
         private final String platformBaseProtocol;
         private final String platformBaseType;
         private final List<XmlNode> children;
-        private final Set<String> platforms = new LinkedHashSet<>();
         private final Set<String> policies = new LinkedHashSet<>();
 
         private UsageContext(String usageId, String platformBaseId, String platformBaseProtocol, String platformBaseType, XmlNode details) {
