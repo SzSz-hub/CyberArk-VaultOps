@@ -1,3 +1,5 @@
+import javafx.application.Platform;
+import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
@@ -17,9 +19,13 @@ import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public class AppController {
@@ -35,6 +41,14 @@ public class AppController {
     private final PoliciesParser policiesParser = new PoliciesParser();
     private final Map<String, EnvironmentLoadState> environmentLoadStates = new HashMap<>();
 
+    private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "VaultOps-loader");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private final Map<TableView<?>, FilterBinding> filterBindings = new IdentityHashMap<>();
+
     private boolean connectionComponentLoaded;
     private boolean psmpLoaded;
     private boolean psmLoaded;
@@ -48,11 +62,44 @@ public class AppController {
         this.onLoadError = onLoadError == null ? message -> {} : onLoadError;
     }
 
+    public void shutdown() {
+        backgroundExecutor.shutdownNow();
+    }
+
+    @FunctionalInterface
+    private interface ThrowingSupplier<T> {
+        T get() throws Exception;
+    }
+
+    private <T> void runAsync(String target, ThrowingSupplier<T> work, Consumer<T> onSuccess, Runnable onFailure) {
+        submitBackground(() -> {
+            try {
+                T result = work.get();
+                Platform.runLater(() -> onSuccess.accept(result));
+            } catch (Exception error) {
+                Platform.runLater(() -> {
+                    if (onFailure != null) {
+                        onFailure.run();
+                    }
+                    reportLoadError(target, error);
+                });
+            }
+        });
+    }
+
+    /** Submits to the background worker, tolerating shutdown races during application close. */
+    private void submitBackground(Runnable task) {
+        try {
+            backgroundExecutor.submit(task);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor already shutting down; nothing to do.
+        }
+    }
+
     public void loadAll() {
         refreshStatusIndicators();
         ui.refreshCurrentTabContent();
 
-        // Ensure first paint reports the active tab as loaded even when selection listeners did not fire yet.
         loadActiveTabIfNeeded();
         refreshStatusIndicators();
     }
@@ -70,18 +117,16 @@ public class AppController {
 
     public void invalidateCurrentSelection() {
         String selectedTab = ui.getSelectedTabName();
-        if ("Connection Components".equals(selectedTab)
-                || "PSMs".equals(selectedTab)
-                || "PSMPs".equals(selectedTab)) {
+        if (UI.TAB_CONNECTION_COMPONENTS.equals(selectedTab)
+                || UI.TAB_PSMS.equals(selectedTab)
+                || UI.TAB_PSMPS.equals(selectedTab)) {
             invalidatePvDataForActiveEnvironment();
-        } else if ("Usage".equals(selectedTab)
-                || "Usages".equals(selectedTab)
-                || "Policies".equals(selectedTab)
-                || "Targets".equals(selectedTab)
-                || "Platforms".equals(selectedTab)) {
+        } else if (UI.TAB_USAGES.equals(selectedTab)
+                || UI.TAB_POLICIES.equals(selectedTab)
+                || UI.TAB_ALTER_ADDRESSES.equals(selectedTab)) {
             invalidatePoliciesDataForActiveEnvironment();
         } else {
-            onLoadError.accept("Update Current works on data tabs (Connection Components, Policies, Targets, Usages, PSMs, PSMPs).");
+            onLoadError.accept("Update Current works on data tabs (Connection Components, Policies, Alter Addresses, Usages, PSMs, PSMPs).");
             refreshStatusIndicators();
             return;
         }
@@ -120,13 +165,20 @@ public class AppController {
         Path pvPath = folderPath.resolve(PV_CONFIGURATION_FILE);
         Path policiesPath = folderPath.resolve(POLICIES_FILE);
 
-        boolean pvStale = isFileStale(envState.pvConfiguration, pvPath);
-        boolean policiesStale = isFileStale(envState.policies, policiesPath);
+        String sourceName = displaySource(profile);
+        LocalDateTime pvLoadedAt = envState.pvConfiguration.loadedAt;
+        FileTime pvModifiedAtLoad = envState.pvConfiguration.sourceModifiedAtLoad;
+        LocalDateTime policiesLoadedAt = envState.policies.loadedAt;
+        FileTime policiesModifiedAtLoad = envState.policies.sourceModifiedAtLoad;
 
-        String pvLabel = formatLoadStatusLabel(PV_CONFIGURATION_FILE, envState.pvConfiguration, pvStale);
-        String policiesLabel = formatLoadStatusLabel(POLICIES_FILE, envState.policies, policiesStale);
-
-        ui.setLoadStatus(displaySource(profile), pvLabel, pvStale, policiesLabel, policiesStale);
+        submitBackground(() -> {
+            boolean pvStale = isStale(pvLoadedAt, pvModifiedAtLoad, readLastModified(pvPath));
+            boolean policiesStale = isStale(policiesLoadedAt, policiesModifiedAtLoad, readLastModified(policiesPath));
+            String pvLabel = formatLoadStatusLabel(PV_CONFIGURATION_FILE, pvLoadedAt, pvStale);
+            String policiesLabel = formatLoadStatusLabel(POLICIES_FILE, policiesLoadedAt, policiesStale);
+            Platform.runLater(() ->
+                    ui.setLoadStatus(sourceName, pvLabel, pvStale, policiesLabel, policiesStale));
+        });
     }
 
     public void showConnectionComponentDetails(PVConfigurationParser.ConnectionComponentEntry entry) {
@@ -158,17 +210,71 @@ public class AppController {
             return;
         }
 
+        String pvConfigPath;
+        String policiesPath;
         try {
-            String pvConfigPath = getActivePvConfigurationPath();
-            ObservableList<PVConfigurationParser.ConnectionComponentEntry> masterData =
-                    FXCollections.observableArrayList(pvParser.GetConnectionComponents(pvConfigPath));
-            wireFiltering(ui.getConnectionComponentTable(), masterData);
-            connectionComponentLoaded = true;
-            markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
-            refreshStatusIndicators();
+            pvConfigPath = getActivePvConfigurationPath();
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             reportLoadError("connection components", e);
+            return;
         }
+
+        connectionComponentLoaded = true;
+
+        runAsync("connection components",
+                () -> buildConnectionComponents(pvConfigPath, policiesPath),
+                result -> {
+                    ObservableList<PVConfigurationParser.ConnectionComponentEntry> masterData =
+                            FXCollections.observableArrayList(result.components());
+                    wireFiltering(ui.getConnectionComponentTable(), masterData);
+                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    // M3: counts are derived from Policies.xml, so track its staleness too.
+                    if (result.policiesRead()) {
+                        markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    }
+                    refreshStatusIndicators();
+                },
+                () -> connectionComponentLoaded = false);
+    }
+
+    private ConnectionComponentsResult buildConnectionComponents(String pvConfigPath, String policiesPath) throws Exception {
+        List<PVConfigurationParser.ConnectionComponentEntry> components = pvParser.GetConnectionComponents(pvConfigPath);
+
+        Map<String, Integer> assignmentCounts = new HashMap<>();
+        boolean policiesRead = false;
+        try {
+            List<PoliciesParser.PolicyEntry> policies = policiesParser.getPolicies(policiesPath);
+            policiesRead = true;
+            for (PoliciesParser.PolicyEntry policy : policies) {
+                String assignedCompStr = policy.assignedComponents();
+                if (assignedCompStr != null && !assignedCompStr.isBlank()) {
+                    String[] compIds = assignedCompStr.split(",");
+                    for (String compId : compIds) {
+                        String trimmedId = compId.trim();
+                        if (!trimmedId.isBlank()) {
+                            assignmentCounts.put(trimmedId, assignmentCounts.getOrDefault(trimmedId, 0) + 1);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // If policies can't be loaded, counts default to 0 and staleness is not tracked.
+        }
+
+        List<PVConfigurationParser.ConnectionComponentEntry> componentsWithCounts = new ArrayList<>();
+        for (PVConfigurationParser.ConnectionComponentEntry comp : components) {
+            int count = assignmentCounts.getOrDefault(comp.id(), 0);
+            componentsWithCounts.add(new PVConfigurationParser.ConnectionComponentEntry(
+                    comp.id(), comp.name(), comp.ClientApp(), comp.ClientDispatcher(), count, comp.details()
+            ));
+        }
+        return new ConnectionComponentsResult(componentsWithCounts, policiesRead);
+    }
+
+    private record ConnectionComponentsResult(
+            List<PVConfigurationParser.ConnectionComponentEntry> components,
+            boolean policiesRead) {
     }
 
     public void loadPSMPServersIfNeeded() {
@@ -176,17 +282,23 @@ public class AppController {
             return;
         }
 
+        String pvConfigPath;
         try {
-            String pvConfigPath = getActivePvConfigurationPath();
-            ObservableList<PVConfigurationParser.PSMPServerEntry> masterData =
-                    FXCollections.observableArrayList(pvParser.getPSMPServers(pvConfigPath));
-            wireFiltering(ui.getPsmpTable(), masterData);
-            psmpLoaded = true;
-            markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
-            refreshStatusIndicators();
+            pvConfigPath = getActivePvConfigurationPath();
         } catch (Exception e) {
             reportLoadError("PSMP servers", e);
+            return;
         }
+        psmpLoaded = true;
+
+        runAsync("PSMP servers",
+                () -> pvParser.getPSMPServers(pvConfigPath),
+                data -> {
+                    wireFiltering(ui.getPsmpTable(), FXCollections.observableArrayList(data));
+                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    refreshStatusIndicators();
+                },
+                () -> psmpLoaded = false);
     }
 
     public void loadPSMServersIfNeeded() {
@@ -194,17 +306,23 @@ public class AppController {
             return;
         }
 
+        String pvConfigPath;
         try {
-            String pvConfigPath = getActivePvConfigurationPath();
-            ObservableList<PVConfigurationParser.PSMServerEntry> masterData =
-                    FXCollections.observableArrayList(pvParser.getPSMServers(pvConfigPath));
-            wireFiltering(ui.getPsmTable(), masterData);
-            psmLoaded = true;
-            markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
-            refreshStatusIndicators();
+            pvConfigPath = getActivePvConfigurationPath();
         } catch (Exception e) {
             reportLoadError("PSM servers", e);
+            return;
         }
+        psmLoaded = true;
+
+        runAsync("PSM servers",
+                () -> pvParser.getPSMServers(pvConfigPath),
+                data -> {
+                    wireFiltering(ui.getPsmTable(), FXCollections.observableArrayList(data));
+                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    refreshStatusIndicators();
+                },
+                () -> psmLoaded = false);
     }
 
     public void loadUsageIfNeeded() {
@@ -212,17 +330,23 @@ public class AppController {
             return;
         }
 
+        String policiesPath;
         try {
-            String policiesPath = getActivePoliciesPath();
-            ObservableList<PoliciesParser.usageEntry> masterData =
-                    FXCollections.observableArrayList(new PoliciesParser().getUsage(policiesPath));
-            wireFiltering(ui.getUsageTable(), masterData);
-            usagesLoaded = true;
-            markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
-            refreshStatusIndicators();
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             reportLoadError("Usage", e);
+            return;
         }
+        usagesLoaded = true;
+
+        runAsync("Usage",
+                () -> policiesParser.getUsage(policiesPath),
+                data -> {
+                    wireFiltering(ui.getUsageTable(), FXCollections.observableArrayList(data));
+                    markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    refreshStatusIndicators();
+                },
+                () -> usagesLoaded = false);
     }
 
     public void loadPoliciesIfNeeded() {
@@ -230,35 +354,72 @@ public class AppController {
             return;
         }
 
+        String policiesPath;
         try {
-            String policiesPath = getActivePoliciesPath();
-            ObservableList<PoliciesParser.PolicyEntry> masterData =
-                    FXCollections.observableArrayList(policiesParser.getPolicies(policiesPath));
-            wireFiltering(ui.getPoliciesTable(), masterData);
-            policiesLoaded = true;
-            markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
-            refreshStatusIndicators();
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             reportLoadError("Policies", e);
+            return;
         }
+        policiesLoaded = true;
+
+        runAsync("Policies",
+                () -> policiesParser.getPolicies(policiesPath),
+                data -> {
+                    wireFiltering(ui.getPoliciesTable(), FXCollections.observableArrayList(data));
+                    markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    refreshStatusIndicators();
+                },
+                () -> policiesLoaded = false);
     }
 
     public void loadTargetsIfNeeded() {
-        if (targetsLoaded || ui.getTargetsTable() == null) {
+        if (targetsLoaded || ui.getAlteredAddressTable() == null) {
             return;
         }
 
+        String pvConfigPath;
         try {
-            String pvConfigPath = getActivePvConfigurationPath();
-            ObservableList<PoliciesParser.TargetEntry> masterData =
-                    FXCollections.observableArrayList(policiesParser.getTargets(pvConfigPath));
-            wireFiltering(ui.getTargetsTable(), masterData);
-            targetsLoaded = true;
-            markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
-            refreshStatusIndicators();
+            pvConfigPath = getActivePvConfigurationPath();
         } catch (Exception e) {
-            reportLoadError("Targets", e);
+            reportLoadError("altered addresses", e);
+            return;
         }
+        targetsLoaded = true;
+
+        runAsync("altered addresses",
+                () -> policiesParser.getAggregatedTargetsByAlteredAddress(pvConfigPath),
+                data -> {
+                    wireFiltering(ui.getAlteredAddressTable(), FXCollections.observableArrayList(data));
+                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    refreshStatusIndicators();
+                },
+                () -> targetsLoaded = false);
+    }
+
+    public void onAlteredAddressSelected(String address) {
+        if (address == null || address.isBlank()) {
+            ui.setTargetDetails(List.of());
+            return;
+        }
+
+        String pvConfigPath;
+        try {
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            ui.setTargetDetails(List.of());
+            reportLoadError("target details", e);
+            return;
+        }
+
+        runAsync("target details",
+                () -> policiesParser.getTargetDetailsForAddress(pvConfigPath, address),
+                details -> {
+                    ui.setTargetDetails(details);
+                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    refreshStatusIndicators();
+                },
+                () -> ui.setTargetDetails(List.of()));
     }
 
     public void onConnectionComponentSelected(PVConfigurationParser.ConnectionComponentEntry entry) {
@@ -267,15 +428,23 @@ public class AppController {
             return;
         }
 
+        String policiesPath;
         try {
-            String policiesPath = getActivePoliciesPath();
-            ui.setConnectionAssignments(policiesParser.getAssignmentsForConnectionComponent(policiesPath, entry.id()));
-            markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
-            refreshStatusIndicators();
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             ui.setConnectionAssignments(List.of());
             reportLoadError("component assignments", e);
+            return;
         }
+
+        runAsync("component assignments",
+                () -> policiesParser.getAssignmentsForConnectionComponent(policiesPath, entry.id()),
+                rows -> {
+                    ui.setConnectionAssignments(rows);
+                    markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    refreshStatusIndicators();
+                },
+                () -> ui.setConnectionAssignments(List.of()));
     }
 
     public void onPolicySelected(PoliciesParser.PolicyEntry policy) {
@@ -284,13 +453,19 @@ public class AppController {
             return;
         }
 
+        String policiesPath;
         try {
-            String policiesPath = getActivePoliciesPath();
-            ui.setPolicyAssignments(policiesParser.getComponentsForPolicy(policiesPath, policy.policyId()));
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             ui.setPolicyAssignments(List.of());
             reportLoadError("policy components", e);
+            return;
         }
+
+        runAsync("policy components",
+                () -> policiesParser.getComponentsForPolicy(policiesPath, policy.policyId()),
+                ui::setPolicyAssignments,
+                () -> ui.setPolicyAssignments(List.of()));
     }
 
     public void onUsageSelected(PoliciesParser.usageEntry usage) {
@@ -299,13 +474,19 @@ public class AppController {
             return;
         }
 
+        String policiesPath;
         try {
-            String policiesPath = getActivePoliciesPath();
-            ui.setUsagePolicyAssignments(policiesParser.getPoliciesForUsage(policiesPath, usage.usageId()));
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             ui.setUsagePolicyAssignments(List.of());
             reportLoadError("usage policies", e);
+            return;
         }
+
+        runAsync("usage policies",
+                () -> policiesParser.getPoliciesForUsage(policiesPath, usage.usageId()),
+                ui::setUsagePolicyAssignments,
+                () -> ui.setUsagePolicyAssignments(List.of()));
     }
 
     public void showPolicyDetails(PoliciesParser.PolicyEntry policy) {
@@ -332,6 +513,70 @@ public class AppController {
         popup.show();
     }
 
+    public void showUsageDetails(PoliciesParser.usageEntry usage) {
+        if (usage == null || usage.children() == null || usage.children().isEmpty()) {
+            return;
+        }
+
+        TextArea detailsArea = new TextArea(formatConnectionComponentDetails(usage.children().get(0)));
+        detailsArea.getStyleClass().add("code-area");
+        detailsArea.setEditable(false);
+        detailsArea.setWrapText(false);
+
+        BorderPane root = new BorderPane(detailsArea);
+        root.getStyleClass().add("details-popup");
+        Label title = new Label("Usage: " + usage.usageId());
+        title.getStyleClass().add("details-title");
+        root.setTop(title);
+
+        Stage popup = new Stage();
+        popup.setTitle("Usage Details");
+        Scene scene = new Scene(root, 900, 700);
+        ui.applyTheme(scene);
+        popup.setScene(scene);
+        popup.show();
+    }
+
+    public void showConnectionAssignmentDetails(PoliciesParser.ComponentAssignmentEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        showPolicyDetailsById(entry.policyId());
+    }
+
+    public void showPolicyComponentDetails(PoliciesParser.ComponentAssignmentEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        showPolicyDetailsById(entry.policyId());
+    }
+
+    public void showUsagePolicyDetails(PoliciesParser.UsagePolicyEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        showPolicyDetailsById(entry.policyId());
+    }
+
+    private void showPolicyDetailsById(String policyId) {
+        if (policyId == null || policyId.isBlank()) {
+            return;
+        }
+        try {
+            String policiesPath = getActivePoliciesPath();
+            List<PoliciesParser.PolicyEntry> policies = policiesParser.getPolicies(policiesPath);
+            for (PoliciesParser.PolicyEntry policy : policies) {
+                if (policyId.equalsIgnoreCase(policy.policyId())) {
+                    showPolicyDetails(policy);
+                    return;
+                }
+            }
+            onLoadError.accept("Policy details not found for: " + policyId);
+        } catch (Exception e) {
+            reportLoadError("policy details", e);
+        }
+    }
+
     private void reportLoadError(String target, Exception error) {
         AppSettings.SourceProfile profile = settings.getActiveProfile();
         String profileName = profile == null || profile.displayName() == null || profile.displayName().isBlank()
@@ -356,10 +601,28 @@ public class AppController {
         if (profile == null) {
             throw new IllegalStateException("No source profile is selected.");
         }
-        if (profile.folderPath() == null || profile.folderPath().isBlank()) {
+        String rawFolder = profile.folderPath();
+        if (rawFolder == null || rawFolder.isBlank()) {
             throw new IllegalStateException("Source profile '" + profile.displayName() + "' has no folder configured.");
         }
-        return Paths.get(profile.folderPath()).normalize();
+        return canonicalizeFolder(rawFolder.trim());
+    }
+
+    private Path canonicalizeFolder(String rawFolder) {
+        if (rawFolder.indexOf('\u0000') >= 0) {
+            throw new IllegalStateException("Folder path contains invalid characters.");
+        }
+        Path folder;
+        try {
+            folder = Paths.get(rawFolder);
+        } catch (RuntimeException invalidPath) {
+            throw new IllegalStateException("Folder path is not valid: " + rawFolder);
+        }
+        Path normalized = folder.toAbsolutePath().normalize();
+        if (Files.exists(normalized) && !Files.isDirectory(normalized)) {
+            throw new IllegalStateException("Configured source path is not a folder: " + normalized);
+        }
+        return normalized;
     }
 
     private void invalidatePvDataForActiveEnvironment() {
@@ -393,12 +656,13 @@ public class AppController {
         if (ui.getPoliciesTable() != null) {
             ui.getPoliciesTable().setItems(FXCollections.observableArrayList());
         }
-        if (ui.getTargetsTable() != null) {
-            ui.getTargetsTable().setItems(FXCollections.observableArrayList());
+        if (ui.getAlteredAddressTable() != null) {
+            ui.getAlteredAddressTable().setItems(FXCollections.observableArrayList());
         }
         ui.setPolicyAssignments(List.of());
         ui.setUsagePolicyAssignments(List.of());
         ui.setConnectionAssignments(List.of());
+        ui.setTargetDetails(List.of());
 
         AppSettings.SourceProfile profile = settings.getActiveProfile();
         if (profile != null) {
@@ -425,12 +689,11 @@ public class AppController {
         return environmentLoadStates.computeIfAbsent(profileId == null ? "" : profileId, id -> new EnvironmentLoadState());
     }
 
-    private boolean isFileStale(FileLoadState state, Path sourceFile) {
-        if (state == null || state.loadedAt == null || state.sourceModifiedAtLoad == null) {
+    private boolean isStale(LocalDateTime loadedAt, FileTime modifiedAtLoad, FileTime currentModified) {
+        if (loadedAt == null || modifiedAtLoad == null) {
             return false;
         }
-        FileTime currentModified = readLastModified(sourceFile);
-        return currentModified != null && currentModified.compareTo(state.sourceModifiedAtLoad) > 0;
+        return currentModified != null && currentModified.compareTo(modifiedAtLoad) > 0;
     }
 
     private FileTime readLastModified(Path path) {
@@ -444,12 +707,12 @@ public class AppController {
         }
     }
 
-    private String formatLoadStatusLabel(String fileName, FileLoadState state, boolean stale) {
-        if (state == null || state.loadedAt == null) {
+    private String formatLoadStatusLabel(String fileName, LocalDateTime loadedAt, boolean stale) {
+        if (loadedAt == null) {
             return fileName + ": never loaded";
         }
 
-        String text = fileName + ": loaded " + LOAD_TIME_FORMATTER.format(state.loadedAt);
+        String text = fileName + ": loaded " + LOAD_TIME_FORMATTER.format(loadedAt);
         if (stale) {
             return text + " (newer file detected)";
         }
@@ -465,34 +728,70 @@ public class AppController {
 
     private void loadActiveTabIfNeeded() {
         String selectedTab = ui.getSelectedTabName();
-        if ("PSMs".equals(selectedTab)) {
+        if (UI.TAB_PSMS.equals(selectedTab)) {
             loadPSMServersIfNeeded();
-        } else if ("PSMPs".equals(selectedTab)) {
+        } else if (UI.TAB_PSMPS.equals(selectedTab)) {
             loadPSMPServersIfNeeded();
-        } else if ("Policies".equals(selectedTab)) {
+        } else if (UI.TAB_POLICIES.equals(selectedTab)) {
             loadPoliciesIfNeeded();
-        } else if ("Usages".equals(selectedTab)) {
+        } else if (UI.TAB_USAGES.equals(selectedTab)) {
             loadUsageIfNeeded();
-        } else if ("Targets".equals(selectedTab)) {
+        } else if (UI.TAB_ALTER_ADDRESSES.equals(selectedTab)) {
             loadTargetsIfNeeded();
         } else {
             loadConnectionComponentIfNeeded();
         }
     }
 
+    @SuppressWarnings("unchecked")
     private <T> void wireFiltering(TableView<T> table, ObservableList<T> masterData) {
-        FilteredList<T> filteredData = new FilteredList<>(masterData, p -> true);
+        FilterBinding binding = filterBindings.get(table);
+
+        if (binding != null && table.getItems() == binding.sorted) {
+            ((ObservableList<T>) binding.backing).setAll(masterData);
+            return;
+        }
+
+        if (binding != null) {
+            binding.detachListeners();
+        }
+
+        binding = new FilterBinding();
+        ObservableList<T> backing = FXCollections.observableArrayList(masterData);
+        FilteredList<T> filteredData = new FilteredList<>(backing, p -> true);
 
         for (TableColumn<T, ?> col : table.getColumns()) {
             if (col.getUserData() instanceof TextField tf) {
-                tf.textProperty().addListener((obs, oldVal, newVal) ->
-                        filteredData.setPredicate(entry -> columnFiltersMatch(entry, table)));
+                ChangeListener<String> listener = (obs, oldVal, newVal) ->
+                        filteredData.setPredicate(entry -> columnFiltersMatch(entry, table));
+                tf.textProperty().addListener(listener);
+                binding.fields.add(tf);
+                binding.listeners.add(listener);
             }
         }
 
         SortedList<T> sortedData = new SortedList<>(filteredData);
         sortedData.comparatorProperty().bind(table.comparatorProperty());
         table.setItems(sortedData);
+
+        binding.backing = backing;
+        binding.sorted = sortedData;
+        filterBindings.put(table, binding);
+    }
+
+    private static final class FilterBinding {
+        private ObservableList<?> backing;
+        private SortedList<?> sorted;
+        private final List<TextField> fields = new ArrayList<>();
+        private final List<ChangeListener<String>> listeners = new ArrayList<>();
+
+        private void detachListeners() {
+            for (int i = 0; i < fields.size() && i < listeners.size(); i++) {
+                fields.get(i).textProperty().removeListener(listeners.get(i));
+            }
+            fields.clear();
+            listeners.clear();
+        }
     }
 
     private <T> boolean columnFiltersMatch(T entry, TableView<T> table) {

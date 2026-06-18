@@ -14,10 +14,15 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.stream.Stream;
 
-public record ThemeManager(Path externalThemesDirectory) {
+public final class ThemeManager {
     private static final String THEMES_INDEX = "/themes/themes.properties";
     private static final String BASE_THEME_FILE = "base.css";
     private static final String EXAMPLE_THEME_FILE = "example.css";
+
+    private final Path externalThemesDirectory;
+
+    private List<ThemeOption> cachedThemes;
+    private boolean exampleTemplateEnsured;
 
     public ThemeManager(Path externalThemesDirectory) {
         this.externalThemesDirectory = externalThemesDirectory == null
@@ -25,12 +30,24 @@ public record ThemeManager(Path externalThemesDirectory) {
                 : externalThemesDirectory.toAbsolutePath().normalize();
     }
 
+    public Path externalThemesDirectory() {
+        return externalThemesDirectory;
+    }
+
+    public void refreshThemes() {
+        cachedThemes = null;
+    }
+
     public List<ThemeOption> discoverThemes() {
+        if (cachedThemes != null) {
+            return cachedThemes;
+        }
         Properties themeIndex = loadThemeIndex();
         Map<String, ThemeOption> themes = new LinkedHashMap<>();
         loadPackagedThemes(themes, themeIndex);
         loadExternalThemes(themes);
-        return new ArrayList<>(themes.values());
+        cachedThemes = new ArrayList<>(themes.values());
+        return cachedThemes;
     }
 
     public ThemeOption resolveTheme(String themeId, List<ThemeOption> themes) {
@@ -127,6 +144,11 @@ public record ThemeManager(Path externalThemesDirectory) {
     }
 
     private void ensureExampleThemeTemplate() {
+        if (exampleTemplateEnsured) {
+            return;
+        }
+        exampleTemplateEnsured = true;
+
         Path exampleThemePath = externalThemesDirectory.resolve(EXAMPLE_THEME_FILE);
         if (Files.exists(exampleThemePath)) {
             return;

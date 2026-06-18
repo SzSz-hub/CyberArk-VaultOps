@@ -7,6 +7,8 @@ import javafx.animation.PauseTransition;
 import javafx.animation.Timeline;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -30,6 +32,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class UI {
+    static final String TAB_CONNECTION_COMPONENTS = "Connection Components";
+    static final String TAB_POLICIES = "Policies";
+    static final String TAB_USAGES = "Usages";
+    static final String TAB_ALTER_ADDRESSES = "Alter Addresses";
+    static final String TAB_PSMS = "PSMs";
+    static final String TAB_PSMPS = "PSMPs";
+
     private final AppSettings settings;
     private final AppSettingsStore settingsStore;
     private final ThemeManager themeManager;
@@ -55,6 +64,7 @@ public class UI {
     private Runnable onRefreshCurrentRequested = NO_OP;
     private Runnable onReloadAllRequested = NO_OP;
     private Runnable onStatusRefreshRequested = NO_OP;
+    private Runnable onAppClose = NO_OP;
 
     private static Runnable safeRunnable(Runnable runnable) {
         return runnable == null ? NO_OP : runnable;
@@ -103,7 +113,7 @@ public class UI {
     private TableView<PVConfigurationParser.ConnectionComponentEntry> connectionComponentTable;
     private VBox connectionComponentContent;
 
-    private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowSelected = entry -> {
+    private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowDoubleClicked = entry -> {
     };
     private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentSelected = entry -> {
     };
@@ -112,6 +122,8 @@ public class UI {
     private java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowDoubleClicked = entry -> {
     };
     private java.util.function.Consumer<PoliciesParser.usageEntry> onUsageRowSelected = entry -> {
+    };
+    private java.util.function.Consumer<PoliciesParser.usageEntry> onUsageRowDoubleClicked = entry -> {
     };
     private java.util.function.Consumer<PoliciesParser.ComponentAssignmentEntry> onConnectionAssignmentDoubleClicked = entry -> {
     };
@@ -140,11 +152,6 @@ public class UI {
         this.onTargetsTabSelected = safeRunnable(onTargetsTabSelected);
     }
 
-    void setOnConnectionComponentRowSelected(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowSelected) {
-        this.onConnectionComponentRowSelected = onConnectionComponentRowSelected == null ? entry -> {
-        } : onConnectionComponentRowSelected;
-    }
-
     void setOnConnectionComponentSelected(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentSelected) {
         this.onConnectionComponentSelected = onConnectionComponentSelected == null ? entry -> {
         } : onConnectionComponentSelected;
@@ -163,6 +170,16 @@ public class UI {
     void setOnUsageRowSelected(java.util.function.Consumer<PoliciesParser.usageEntry> onUsageRowSelected) {
         this.onUsageRowSelected = onUsageRowSelected == null ? entry -> {
         } : onUsageRowSelected;
+    }
+
+    void setOnUsageRowDoubleClicked(java.util.function.Consumer<PoliciesParser.usageEntry> onUsageRowDoubleClicked) {
+        this.onUsageRowDoubleClicked = onUsageRowDoubleClicked == null ? entry -> {
+        } : onUsageRowDoubleClicked;
+    }
+
+    void setOnConnectionComponentRowDoubleClicked(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentRowDoubleClicked) {
+        this.onConnectionComponentRowDoubleClicked = onConnectionComponentRowDoubleClicked == null ? entry -> {
+        } : onConnectionComponentRowDoubleClicked;
     }
 
     void setOnConnectionAssignmentDoubleClicked(java.util.function.Consumer<PoliciesParser.ComponentAssignmentEntry> onConnectionAssignmentDoubleClicked) {
@@ -184,20 +201,13 @@ public class UI {
         return policiesTable;
     }
 
-    TableView<PoliciesParser.TargetEntry> getTargetsTable() {
-        return targetsTable;
+    TableView<PoliciesParser.AlteredAddressEntry> getAlteredAddressTable() {
+        return alterAddressTable;
     }
 
-    TableView<PoliciesParser.UsagePolicyEntry> getUsagePolicyAssignmentsTable() {
-        return usagePolicyAssignmentsTable;
-    }
-
-    TableView<PoliciesParser.ComponentAssignmentEntry> getPolicyAssignmentsTable() {
-        return policyAssignmentsTable;
-    }
-
-    TableView<PoliciesParser.ComponentAssignmentEntry> getConnectionAssignmentTable() {
-        return connectionAssignmentTable;
+    void setOnAlteredAddressSelected(java.util.function.Consumer<String> onAlteredAddressSelected) {
+        this.onAlteredAddressSelected = onAlteredAddressSelected == null ? address -> {
+        } : onAlteredAddressSelected;
     }
 
     void setOnRefreshCurrentRequested(Runnable onRefreshCurrentRequested) {
@@ -212,6 +222,10 @@ public class UI {
         this.onStatusRefreshRequested = safeRunnable(onStatusRefreshRequested);
     }
 
+    void setOnAppClose(Runnable onAppClose) {
+        this.onAppClose = safeRunnable(onAppClose);
+    }
+
     private TabPane tabPane;
     private Timeline statusPoller;
     private Label sourceStatusLabel;
@@ -220,8 +234,11 @@ public class UI {
     private TableView<PoliciesParser.PolicyEntry> policiesTable;
     private VBox policiesContent;
     private TableView<PoliciesParser.ComponentAssignmentEntry> connectionAssignmentTable;
-    private TableView<PoliciesParser.TargetEntry> targetsTable;
     private VBox targetsContent;
+    private TableView<PoliciesParser.AlteredAddressEntry> alterAddressTable;
+    private TableView<PoliciesParser.TargetDetailEntry> targetDetailsTable;
+    private java.util.function.Consumer<String> onAlteredAddressSelected = address -> {
+    };
     private TableView<PoliciesParser.ComponentAssignmentEntry> policyAssignmentsTable;
 
     void setupUI(Stage stage) {
@@ -269,7 +286,10 @@ public class UI {
         mainScene = new Scene(sceneRoot, 900, 600);
         applyTheme(mainScene);
         stage.setScene(mainScene);
-        stage.setOnCloseRequest(event -> stopStatusPolling());
+        stage.setOnCloseRequest(event -> {
+            stopStatusPolling();
+            onAppClose.run();
+        });
         stage.show();
         startStatusPolling();
     }
@@ -290,22 +310,22 @@ public class UI {
                 new MenuItem("Exit")
         );
 
-        Menu EditMenu = new Menu("Edit");
-        EditMenu.getItems().addAll(
+        Menu editMenu = new Menu("Edit");
+        editMenu.getItems().addAll(
                 new MenuItem("Order")
         );
 
-        Menu SettingsMenu = new Menu("Settings");
+        Menu settingsMenu = new Menu("Settings");
         MenuItem sourcesItem = new MenuItem("Sources");
         sourcesItem.setOnAction(event -> openSourcesSettingsDialog());
         themeMenu = new Menu("Theme");
         refreshThemeMenu();
-        SettingsMenu.getItems().addAll(sourcesItem, themeMenu);
+        settingsMenu.getItems().addAll(sourcesItem, themeMenu);
 
-        Menu ViewMenu = new Menu("View");
+        Menu viewMenu = new Menu("View");
         Menu helpMenu = new Menu("Help");
 
-        menuBar.getMenus().addAll(fileMenu, EditMenu, SettingsMenu, ViewMenu, helpMenu);
+        menuBar.getMenus().addAll(fileMenu, editMenu, settingsMenu, viewMenu, helpMenu);
         return menuBar;
     }
 
@@ -314,12 +334,12 @@ public class UI {
         tabPane.getStyleClass().add("main-tab-pane");
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
-        Tab connectionComponents = new Tab("Connection Components");
-        Tab policies = new Tab("Policies");
-        Tab usages = new Tab("Usages");
-        Tab targets = new Tab("Targets");
-        Tab psms = new Tab("PSMs");
-        Tab psmps = new Tab("PSMPs");
+        Tab connectionComponents = new Tab(TAB_CONNECTION_COMPONENTS);
+        Tab policies = new Tab(TAB_POLICIES);
+        Tab usages = new Tab(TAB_USAGES);
+        Tab targets = new Tab(TAB_ALTER_ADDRESSES);
+        Tab psms = new Tab(TAB_PSMS);
+        Tab psmps = new Tab(TAB_PSMPS);
 
         tabPane.getTabs().addAll(connectionComponents, policies, usages, targets, psms, psmps);
 
@@ -352,32 +372,6 @@ public class UI {
 
     // --- Tab content ---
 
-    private VBox createPlatformsContent() {
-        VBox container = new VBox(4);
-        container.getStyleClass().add("content-pane");
-        container.setPadding(new Insets(8));
-
-        TableView<?> table = new TableView<>();
-        table.getStyleClass().add("modern-table");
-        table.getColumns().addAll(
-                new TableColumn<>("Platform ID"),
-                new TableColumn<>("Enabled"),
-                new TableColumn<>("Overwrite")
-        );
-        table.setPlaceholder(new Label("No platforms loaded"));
-        VBox.setVgrow(table, Priority.ALWAYS);
-        container.getChildren().add(table);
-        return container;
-    }
-
-    private VBox createTargetsContent() {
-        VBox container = new VBox(4);
-        container.getStyleClass().add("content-pane");
-        container.setPadding(new Insets(8));
-        container.getChildren().add(new Label("Targets — coming soon"));
-        return container;
-    }
-
     private VBox getConnectionComponentContent() {
         if (connectionComponentContent == null) {
             connectionComponentContent = new VBox();
@@ -391,7 +385,8 @@ public class UI {
                     makeColumn("ID", PVConfigurationParser.ConnectionComponentEntry::id, 120),
                     makeColumn("Name", PVConfigurationParser.ConnectionComponentEntry::name, 220),
                     makeColumn("Client App", PVConfigurationParser.ConnectionComponentEntry::ClientApp, 160),
-                    makeColumn("Client Dispatcher", PVConfigurationParser.ConnectionComponentEntry::ClientDispatcher, 200)
+                    makeColumn("Client Dispatcher", PVConfigurationParser.ConnectionComponentEntry::ClientDispatcher, 160),
+                    makeIntegerColumn("Assignment Count", PVConfigurationParser.ConnectionComponentEntry::assignmentCount, 120)
             );
 
             connectionComponentTable.setRowFactory(tv -> {
@@ -400,8 +395,8 @@ public class UI {
                     if (row.isEmpty()) {
                         return;
                     }
-                    if (event.getClickCount() == 2) {
-                        onConnectionComponentRowSelected.accept(row.getItem());
+                    if (event.getClickCount() == 2 && event.getButton() == MouseButton.PRIMARY) {
+                        onConnectionComponentRowDoubleClicked.accept(row.getItem());
                     }
                 });
                 return row;
@@ -418,7 +413,6 @@ public class UI {
             connectionAssignmentTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             connectionAssignmentTable.setPlaceholder(new Label("Select a component to see assigned platforms"));
             connectionAssignmentTable.getColumns().addAll(
-                    makeColumn("Device Type", PoliciesParser.ComponentAssignmentEntry::platformId, 160),
                     makeColumn("Policy", PoliciesParser.ComponentAssignmentEntry::policyId, 120),
                     makeColumn("Component", PoliciesParser.ComponentAssignmentEntry::componentId, 160),
                     makeColumn("Component Enabled", PoliciesParser.ComponentAssignmentEntry::componentEnabled, 110),
@@ -429,11 +423,10 @@ public class UI {
             connectionAssignmentTable.setRowFactory(tv -> {
                 TableRow<PoliciesParser.ComponentAssignmentEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
-                    if (row.isEmpty() || event.getClickCount() != 2) {
+                    if (row.isEmpty() || event.getClickCount() != 2 || event.getButton() != MouseButton.PRIMARY) {
                         return;
                     }
-                    // Double-click would show policy details
-                    // This could be extended to show component or policy details
+                    onConnectionAssignmentDoubleClicked.accept(row.getItem());
                 });
                 return row;
             });
@@ -460,10 +453,9 @@ public class UI {
             policiesTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             policiesTable.setPlaceholder(new Label("No policies loaded"));
             policiesTable.getColumns().addAll(
-                    makeColumn("Device Type", PoliciesParser.PolicyEntry::platformId, 130),
+                    makeColumn("PlatformBaseID", PoliciesParser.PolicyEntry::platformId, 130),
                     makeColumn("Policy ID", PoliciesParser.PolicyEntry::policyId, 130),
                     makeColumn("Policy Name", PoliciesParser.PolicyEntry::policyName, 170),
-                    makeColumn("Policy Enabled", PoliciesParser.PolicyEntry::policyEnabled, 100),
                     makeColumn("Component Assigned", PoliciesParser.PolicyEntry::componentAssigned, 110),
                     makeColumn("Overwrites", PoliciesParser.PolicyEntry::hasOverrides, 90)
             );
@@ -477,7 +469,7 @@ public class UI {
             policiesTable.setRowFactory(tv -> {
                 TableRow<PoliciesParser.PolicyEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
-                    if (!row.isEmpty() && event.getClickCount() == 2) {
+                    if (!row.isEmpty() && event.getClickCount() == 2 && event.getButton() == MouseButton.PRIMARY) {
                         onPolicyRowDoubleClicked.accept(row.getItem());
                     }
                 });
@@ -494,6 +486,17 @@ public class UI {
                     makeColumn("Overwrites", PoliciesParser.ComponentAssignmentEntry::hasOverrides, 90)
             );
 
+            policyAssignmentsTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.ComponentAssignmentEntry> row = new TableRow<>();
+                row.setOnMouseClicked(event -> {
+                    if (row.isEmpty() || event.getClickCount() != 2 || event.getButton() != MouseButton.PRIMARY) {
+                        return;
+                    }
+                    onPolicyComponentDoubleClicked.accept(row.getItem());
+                });
+                return row;
+            });
+
             SplitPane split = new SplitPane(policiesTable, policyAssignmentsTable);
             split.setDividerPositions(0.68);
             VBox.setVgrow(split, Priority.ALWAYS);
@@ -507,20 +510,61 @@ public class UI {
             targetsContent = new VBox(4);
             targetsContent.getStyleClass().add("content-pane");
 
-            targetsTable = new TableView<>();
-            targetsTable.getStyleClass().add("modern-table");
-            targetsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
-            targetsTable.setPlaceholder(new Label("No targets loaded"));
-            targetsTable.getColumns().addAll(
-                    makeColumn("Effective Address", PoliciesParser.TargetEntry::effectiveAddress, 220),
-                    makeColumn("Source Address", PoliciesParser.TargetEntry::sourceAddress, 220),
-                    makeColumn("Altered Address", PoliciesParser.TargetEntry::alteredAddress, 220),
-                    makeColumn("Device Type", PoliciesParser.TargetEntry::platformId, 140),
-                    makeColumn("Policy", PoliciesParser.TargetEntry::policyId, 140)
+            alterAddressTable = new TableView<>();
+            alterAddressTable.getStyleClass().add("modern-table");
+            alterAddressTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            alterAddressTable.setPlaceholder(new Label("No altered addresses loaded"));
+            alterAddressTable.getColumns().addAll(
+                    makeColumn("Altered Address", PoliciesParser.AlteredAddressEntry::address, 300),
+                    makeIntegerColumn("Count", PoliciesParser.AlteredAddressEntry::count, 80)
             );
 
-            VBox.setVgrow(targetsTable, Priority.ALWAYS);
-            targetsContent.getChildren().add(targetsTable);
+            alterAddressTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.AlteredAddressEntry> row = new TableRow<>();
+                // Consume right-button press so JavaFX does not change row selection.
+                row.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+                    if (event.getButton() == MouseButton.SECONDARY) {
+                        event.consume();
+                    }
+                });
+                return row;
+            });
+
+            targetDetailsTable = new TableView<>();
+            targetDetailsTable.getStyleClass().add("modern-table");
+            targetDetailsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+            targetDetailsTable.setPlaceholder(new Label("Select an altered address to see details"));
+            targetDetailsTable.getColumns().addAll(
+                    makeColumn("Policy", PoliciesParser.TargetDetailEntry::platformId, 300),
+                    makeColumn("Custom Component", PoliciesParser.TargetDetailEntry::customComponent, 300)
+            );
+
+            targetDetailsTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.TargetDetailEntry> row = new TableRow<>();
+                row.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+                    if (event.getButton() == MouseButton.SECONDARY) {
+                        event.consume();
+                    }
+                });
+                return row;
+            });
+
+            // Handle selection changes on left table
+            alterAddressTable.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
+                if (newVal != null) {
+                    onAlteredAddressSelected.accept(newVal.address());
+                } else {
+                    setTargetDetails(List.of());
+                }
+            });
+
+            VBox.setVgrow(alterAddressTable, Priority.ALWAYS);
+            VBox.setVgrow(targetDetailsTable, Priority.ALWAYS);
+
+            SplitPane split = new SplitPane(alterAddressTable, targetDetailsTable);
+            split.setDividerPositions(0.4);
+            VBox.setVgrow(split, Priority.ALWAYS);
+            targetsContent.getChildren().add(split);
         }
         return targetsContent;
     }
@@ -537,9 +581,8 @@ public class UI {
             usageTable.getColumns().addAll(
                     makeColumn("Usage ID", PoliciesParser.usageEntry::usageId, 150),
                     makeColumn("Device Type", PoliciesParser.usageEntry::platformBaseType, 150),
-                    makeColumn("Platform Base ID", PoliciesParser.usageEntry::platformBaseId, 170),
                     makeColumn("Platform Protocol", PoliciesParser.usageEntry::platformBaseProtocol, 160),
-                    makeColumn("Policy Count", PoliciesParser.usageEntry::policyCount, 100)
+                    makeIntegerColumn("Policy Count", PoliciesParser.usageEntry::policyCount, 100)
             );
 
             usageTable.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
@@ -548,14 +591,23 @@ public class UI {
                 }
             });
 
+            usageTable.setRowFactory(tv -> {
+                TableRow<PoliciesParser.usageEntry> row = new TableRow<>();
+                row.setOnMouseClicked(event -> {
+                    if (row.isEmpty() || event.getClickCount() != 2 || event.getButton() != MouseButton.PRIMARY) {
+                        return;
+                    }
+                    onUsageRowDoubleClicked.accept(row.getItem());
+                });
+                return row;
+            });
+
             usagePolicyAssignmentsTable = new TableView<>();
             usagePolicyAssignmentsTable.getStyleClass().add("modern-table");
             usagePolicyAssignmentsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             usagePolicyAssignmentsTable.setPlaceholder(new Label("Select a usage to see matching policies"));
             usagePolicyAssignmentsTable.getColumns().addAll(
                     makeColumn("Policy ID", PoliciesParser.UsagePolicyEntry::policyId, 150),
-                    makeColumn("Platform Base ID", PoliciesParser.UsagePolicyEntry::platformBaseId, 150),
-                    makeColumn("Connection Components", PoliciesParser.UsagePolicyEntry::componentIds, 260),
                     makeColumn("Overwrites", PoliciesParser.UsagePolicyEntry::hasOverrides, 90)
             );
 
@@ -563,10 +615,10 @@ public class UI {
             usagePolicyAssignmentsTable.setRowFactory(tv -> {
                 TableRow<PoliciesParser.UsagePolicyEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
-                    if (row.isEmpty() || event.getClickCount() != 2) {
+                    if (row.isEmpty() || event.getClickCount() != 2 || event.getButton() != MouseButton.PRIMARY) {
                         return;
                     }
-                    // Double-click would show policy details
+                    onUsagePolicyDoubleClicked.accept(row.getItem());
                 });
                 return row;
             });
@@ -624,21 +676,6 @@ public class UI {
         }
         return psmpContent;
     }
-
-    private VBox createPlatformTableArea() {
-        VBox box = new VBox(4);
-        Label title = new Label("Platforms");
-
-        TableView<?> table = new TableView<>();
-        table.getColumns().addAll(
-                new TableColumn<>("Platform ID"),
-                new TableColumn<>("Enabled")
-        );
-        VBox.setVgrow(table, Priority.ALWAYS);
-        box.getChildren().addAll(title, table);
-        return box;
-    }
-
 
     private HBox createStatusBar() {
         HBox statusBar = new HBox(10);
@@ -699,8 +736,11 @@ public class UI {
         if (usagePolicyAssignmentsTable != null) {
             usagePolicyAssignmentsTable.setItems(FXCollections.observableArrayList());
         }
-        if (targetsTable != null) {
-            targetsTable.setItems(FXCollections.observableArrayList());
+        if (alterAddressTable != null) {
+            alterAddressTable.setItems(FXCollections.observableArrayList());
+        }
+        if (targetDetailsTable != null) {
+            targetDetailsTable.setItems(FXCollections.observableArrayList());
         }
     }
 
@@ -723,6 +763,13 @@ public class UI {
             return;
         }
         usagePolicyAssignmentsTable.setItems(FXCollections.observableArrayList(rows == null ? List.of() : rows));
+    }
+
+    void setTargetDetails(List<PoliciesParser.TargetDetailEntry> rows) {
+        if (targetDetailsTable == null) {
+            return;
+        }
+        targetDetailsTable.setItems(FXCollections.observableArrayList(rows == null ? List.of() : rows));
     }
 
     void showToast(String message) {
@@ -855,7 +902,7 @@ public class UI {
             RadioMenuItem item = new RadioMenuItem(theme.displayName());
             item.setToggleGroup(themeGroup);
             item.setSelected(resolvedTheme != null && theme.id().equals(resolvedTheme.id()));
-            item.setOnAction(event -> activateTheme(theme.id(), true));
+            item.setOnAction(event -> activateTheme(theme.id()));
             themeMenu.getItems().add(item);
         }
 
@@ -869,6 +916,7 @@ public class UI {
 
         MenuItem refreshThemesItem = new MenuItem("Refresh themes");
         refreshThemesItem.setOnAction(event -> {
+            themeManager.refreshThemes();
             refreshThemeMenu();
             applyTheme(mainScene);
             showToast("Themes refreshed from " + themeManager.externalThemesDirectory());
@@ -883,12 +931,10 @@ public class UI {
         themeMenu.getItems().addAll(refreshThemesItem, openThemesFolderItem, previewThemesItem);
     }
 
-    private void activateTheme(String themeId, boolean persistSelection) {
+    private void activateTheme(String themeId) {
         settings.setTheme(themeId);
         ThemeManager.ThemeOption selected = resolveActiveTheme();
-        if (persistSelection) {
-            settingsStore.save(settings);
-        }
+        settingsStore.save(settings);
         applyTheme(mainScene, selected);
     }
 
@@ -1048,6 +1094,60 @@ public class UI {
         return column;
     }
 
+    private <T> TableColumn<T, String> makeColumn(
+            String header,
+            java.util.function.Function<T, String> getter,
+            double width) {
+        TableColumn<T, String> col = new TableColumn<>();
+        col.setPrefWidth(width);
+        col.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(getter.apply(data.getValue())));
+
+        Label label = new Label(header);
+        label.getStyleClass().add("table-header-title");
+
+        TextField filterField = new TextField();
+        filterField.getStyleClass().add("column-filter-field");
+        filterField.setPromptText("Filter...");
+        filterField.setPrefHeight(22);
+        filterField.setMaxWidth(Double.MAX_VALUE);
+
+        VBox headerBox = new VBox(2, label, filterField);
+        headerBox.getStyleClass().add("table-header-box");
+        col.setGraphic(headerBox);
+        col.setUserData(filterField);
+
+        return col;
+    }
+
+    private <T> TableColumn<T, Integer> makeIntegerColumn(
+            String header,
+            java.util.function.Function<T, Integer> getter,
+            double width) {
+        TableColumn<T, Integer> col = new TableColumn<>();
+        col.setPrefWidth(width);
+        col.setCellValueFactory(data -> {
+            Integer value = getter.apply(data.getValue());
+            return new javafx.beans.property.SimpleObjectProperty<>(value);
+        });
+
+        Label label = new Label(header);
+        label.getStyleClass().add("table-header-title");
+
+        TextField filterField = new TextField();
+        filterField.getStyleClass().add("column-filter-field");
+        filterField.setPromptText("Filter...");
+        filterField.setPrefHeight(22);
+        filterField.setMaxWidth(Double.MAX_VALUE);
+
+        VBox headerBox = new VBox(2, label, filterField);
+        headerBox.getStyleClass().add("table-header-box");
+        col.setGraphic(headerBox);
+        col.setUserData(filterField);
+
+        return col;
+    }
+
     private void openThemesFolder() {
         Path themesDirectory = themeManager.externalThemesDirectory();
         try {
@@ -1071,22 +1171,22 @@ public class UI {
             return;
         }
         String text = selectedTab.getText();
-        if ("Connection Components".equals(text)) {
+        if (TAB_CONNECTION_COMPONENTS.equals(text)) {
             root.setCenter(getConnectionComponentContent());
             onConnectionComponentTabSelected.run();
-        } else if ("Policies".equals(text)) {
+        } else if (TAB_POLICIES.equals(text)) {
             root.setCenter(getPoliciesContent());
             onPoliciesTabSelected.run();
-        } else if ("Usages".equals(text)) {
+        } else if (TAB_USAGES.equals(text)) {
             root.setCenter(getUsagesContent());
             onUsagesTabSelected.run();
-        } else if ("PSMs".equals(text)) {
+        } else if (TAB_PSMS.equals(text)) {
             root.setCenter(getPsmContent());
             onPsmTabSelected.run();
-        } else if ("PSMPs".equals(text)) {
+        } else if (TAB_PSMPS.equals(text)) {
             root.setCenter(getPsmpContent());
             onPsmpTabSelected.run();
-        } else if ("Targets".equals(text)) {
+        } else if (TAB_ALTER_ADDRESSES.equals(text)) {
             root.setCenter(getTargetsContent());
             onTargetsTabSelected.run();
         }
@@ -1374,32 +1474,6 @@ public class UI {
     private record PreviewRow(String host, String zone, String status) {
     }
 
-    private <T> TableColumn<T, String> makeColumn(
-            String header,
-            java.util.function.Function<T, String> getter,
-            double width) {
-        TableColumn<T, String> col = new TableColumn<>();
-        col.setPrefWidth(width);
-        col.setCellValueFactory(data ->
-                new javafx.beans.property.SimpleStringProperty(getter.apply(data.getValue())));
-
-        Label label = new Label(header);
-        label.getStyleClass().add("table-header-title");
-
-        TextField filterField = new TextField();
-        filterField.getStyleClass().add("column-filter-field");
-        filterField.setPromptText("Filter...");
-        filterField.setPrefHeight(22);
-        filterField.setMaxWidth(Double.MAX_VALUE);
-
-        VBox headerBox = new VBox(2, label, filterField);
-        headerBox.getStyleClass().add("table-header-box");
-        col.setGraphic(headerBox);
-        col.setUserData(filterField);
-
-        return col;
-    }
-
     private File existingDirectory(String directoryPath) {
         if (directoryPath == null || directoryPath.isBlank()) {
             return null;
@@ -1436,9 +1510,5 @@ public class UI {
         return !displayNameField.getText().isBlank()
                 || !shortLabelField.getText().isBlank()
                 || !folderPathField.getText().isBlank();
-    }
-
-    private String blankAsNone(String value) {
-        return value == null || value.isBlank() ? "(none)" : value;
     }
 }

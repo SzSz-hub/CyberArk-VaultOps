@@ -1,22 +1,13 @@
 import org.w3c.dom.*;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
 public class PVConfigurationParser extends Parser {
-    public record ConnectionComponentEntry(String id, String name, String ClientApp, String ClientDispatcher, XmlNode details) {
+    public record ConnectionComponentEntry(String id, String name, String ClientApp, String ClientDispatcher, Integer assignmentCount, XmlNode details) {
     }
 
     public List<ConnectionComponentEntry> GetConnectionComponents(String pvConfigurationPath) throws Exception {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        dbf.setNamespaceAware(false);
-        dbf.setIgnoringComments(true);
-
-        DocumentBuilder db = dbf.newDocumentBuilder();
-        Document doc = db.parse(new File(pvConfigurationPath));
-        doc.getDocumentElement().normalize();
+        Document doc = loadSecureDocument(pvConfigurationPath);
 
         NodeList componentNodes = doc.getElementsByTagName("ConnectionComponent");
         List<ConnectionComponentEntry> entries = new ArrayList<>();
@@ -35,7 +26,7 @@ public class PVConfigurationParser extends Parser {
             String clientApp = targetSettings == null ? null : attr(targetSettings, "ClientApp");
             String clientDispatcher = targetSettings == null ? null : attr(targetSettings, "ClientDispatcher");
 
-            entries.add(new ConnectionComponentEntry(id, name, clientApp, clientDispatcher, parseElementTree(component)));
+            entries.add(new ConnectionComponentEntry(id, name, clientApp, clientDispatcher, 0, parseElementTree(component)));
         }
 
         return entries;
@@ -49,13 +40,7 @@ public class PVConfigurationParser extends Parser {
     }
 
     public List<PSMServerEntry> getPSMServers(String pvConfigurationPath) throws Exception {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        dbf.setNamespaceAware(false);
-        dbf.setIgnoringComments(true);
-
-        DocumentBuilder db = dbf.newDocumentBuilder();
-        Document doc = db.parse(new File(pvConfigurationPath));
-        doc.getDocumentElement().normalize();
+        Document doc = loadSecureDocument(pvConfigurationPath);
 
         NodeList serverNodes = doc.getElementsByTagName("PSMServer");
         List<PSMServerEntry> entries = new ArrayList<>();
@@ -105,13 +90,7 @@ public class PVConfigurationParser extends Parser {
     }
 
     public List<PSMPServerEntry> getPSMPServers(String pvConfigurationPath) throws Exception {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        dbf.setNamespaceAware(false);
-        dbf.setIgnoringComments(true);
-
-        DocumentBuilder db = dbf.newDocumentBuilder();
-        Document doc = db.parse(new File(pvConfigurationPath));
-        doc.getDocumentElement().normalize();
+        Document doc = loadSecureDocument(pvConfigurationPath);
 
         NodeList serverNodes = doc.getElementsByTagName("PSMPServer");
         List<PSMPServerEntry> entries = new ArrayList<>();
