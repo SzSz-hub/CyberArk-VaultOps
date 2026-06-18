@@ -141,6 +141,29 @@ Set-Location "C:\path\to\CyberArkAdminTool"
 java -jar .\target\CyberArkAdminTool-1.0-SNAPSHOT.jar
 ```
 
+### Application Icon & Native Packaging
+
+The window icon is drawn at runtime by `AppIcon` (a vault dial + keyhole), so it appears in the
+title bar and alt-tab switcher of the running app — just rebuild and relaunch to see it.
+
+On Windows, the **taskbar button** and the **executable's own file icon** are taken from the
+launching program, not from `stage.getIcons()`. To get the icon everywhere, build a native
+app-image with the bundled profile (requires JDK `jpackage`, included with JDK 17+):
+
+```powershell
+mvn -P native-package clean package
+# Launch the native build:
+& ".\target\dist\CyberArk VaultOps\CyberArk VaultOps.exe"
+```
+
+This generates `target/app-icon.ico` (and PNGs) from the same design via `IconExporter`, then runs
+`jpackage` to embed it. You can also regenerate the assets on their own:
+
+```powershell
+mvn -q compile
+java -cp target/classes IconExporter target
+```
+
 ## XML File Requirements
 
 ### PVConfiguration.xml
