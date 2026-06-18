@@ -26,6 +26,8 @@ import javafx.util.Duration;
 import java.awt.Desktop;
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,6 +41,11 @@ public class UI {
     static final String TAB_PSMS = "PSMs";
     static final String TAB_PSMPS = "PSMPs";
 
+    // Application metadata used by the About window and the main stage title.
+    private static final String APP_NAME = "CyberArk VaultOps";
+    private static final String APP_VERSION = "1.0";
+    private static final String GITHUB_URL = "https://github.com/SzSz-hub/CyberArk-VaultOps";
+
     private final AppSettings settings;
     private final AppSettingsStore settingsStore;
     private final ThemeManager themeManager;
@@ -51,6 +58,7 @@ public class UI {
     private Scene mainScene;
     private Menu themeMenu;
     private boolean suppressSideNavCallbacks;
+    private Stage aboutStage;
 
     private static final Runnable NO_OP = () -> {};
     private static final Duration STATUS_POLL_INTERVAL = Duration.seconds(20);
@@ -273,7 +281,13 @@ public class UI {
 
         tabPane.getSelectionModel().select(0);
 
-        stage.setTitle("CyberArk VaultOps v1.0");
+        stage.setTitle(APP_NAME + " v" + APP_VERSION);
+        try {
+            stage.getIcons().setAll(AppIcon.createIcons());
+        } catch (RuntimeException iconError) {
+            // Icon rendering must never block application startup; fall back to the default icon.
+            System.err.println("Could not generate application icon: " + iconError.getMessage());
+        }
         StackPane sceneRoot = new StackPane(root);
         sceneRoot.getStyleClass().add("app-shell");
         toastContainer = new VBox(8);
@@ -323,7 +337,11 @@ public class UI {
         settingsMenu.getItems().addAll(sourcesItem, themeMenu);
 
         Menu viewMenu = new Menu("View");
+
         Menu helpMenu = new Menu("Help");
+        MenuItem aboutItem = new MenuItem("About " + APP_NAME);
+        aboutItem.setOnAction(event -> openAboutDialog());
+        helpMenu.getItems().add(aboutItem);
 
         menuBar.getMenus().addAll(fileMenu, editMenu, settingsMenu, viewMenu, helpMenu);
         return menuBar;
@@ -1146,6 +1164,106 @@ public class UI {
         col.setUserData(filterField);
 
         return col;
+    }
+
+    /**
+     * Opens the single About window. If it already exists it is simply brought to the front, so
+     * at most one About window can be visible at a time.
+     */
+    private void openAboutDialog() {
+        if (aboutStage != null) {
+            aboutStage.toFront();
+            aboutStage.requestFocus();
+            return;
+        }
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.setTitle("About " + APP_NAME);
+        dialog.setResizable(false);
+        if (primaryStage != null) {
+            dialog.getIcons().setAll(primaryStage.getIcons());
+        }
+        dialog.setOnHidden(event -> aboutStage = null);
+
+        Scene scene = new Scene(buildAboutContent(), 460, 420);
+        applyTheme(scene);
+        dialog.setScene(scene);
+
+        aboutStage = dialog;
+        dialog.show();
+    }
+
+    private VBox buildAboutContent() {
+        VBox container = new VBox(12);
+        container.getStyleClass().addAll("content-pane", "about-dialog");
+        container.setPadding(new Insets(20));
+
+        Label title = new Label(APP_NAME);
+        title.getStyleClass().add("about-title");
+
+        Label version = new Label("Version " + APP_VERSION);
+        version.getStyleClass().add("about-version");
+
+        Label description = new Label(
+                "Open-source administrator tool for managing CyberArk Self-Hosted PAM "
+                        + "configurations and policies. Browse connection components, policies, "
+                        + "usages, altered addresses and PSM/PSMP servers from your PVConfiguration.xml "
+                        + "and Policies.xml files.");
+        description.setWrapText(true);
+        description.getStyleClass().add("about-description");
+
+        Label disclaimer = new Label(
+                "Not affiliated with, endorsed by, or supported by CyberArk Software Ltd.");
+        disclaimer.setWrapText(true);
+        disclaimer.getStyleClass().add("about-disclaimer");
+
+        Label projectLabel = new Label("Project:");
+        projectLabel.getStyleClass().add("about-section-label");
+
+        Hyperlink githubLink = new Hyperlink(GITHUB_URL);
+        githubLink.getStyleClass().add("about-link");
+        githubLink.setOnAction(event -> openInBrowser(GITHUB_URL));
+
+        HBox linkRow = new HBox(6, projectLabel, githubLink);
+        linkRow.setAlignment(Pos.CENTER_LEFT);
+
+        // Placeholder for a future donate / support banner (Buy Me a Coffee, etc.).
+        VBox supportArea = new VBox(4);
+        supportArea.getStyleClass().add("about-support");
+        Label supportLabel = new Label("Support is coming soon.");
+        supportLabel.getStyleClass().add("about-support-note");
+        supportArea.getChildren().add(supportLabel);
+
+        Region spacer = new Region();
+        VBox.setVgrow(spacer, Priority.ALWAYS);
+
+        Button closeButton = new Button("Close");
+        closeButton.setOnAction(event -> {
+            if (aboutStage != null) {
+                aboutStage.close();
+            }
+        });
+        HBox actions = new HBox(closeButton);
+        actions.getStyleClass().add("dialog-actions");
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        container.getChildren().addAll(
+                title, version, description, disclaimer, linkRow, supportArea, spacer, actions);
+        return container;
+    }
+
+    /** Opens a URL in the user's default browser, falling back to a toast if unsupported. */
+    private void openInBrowser(String url) {
+        try {
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(new URI(url));
+                return;
+            }
+        } catch (IOException | URISyntaxException | RuntimeException e) {
+            // Fall through to the toast below.
+        }
+        showToast("Open in your browser: " + url);
     }
 
     private void openThemesFolder() {

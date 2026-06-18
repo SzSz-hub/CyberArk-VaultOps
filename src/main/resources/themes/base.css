@@ -314,3 +314,48 @@
     -fx-padding: 8;
     -fx-spacing: 8;
 }
+
+/* About window */
+.about-title {
+    -fx-font-size: 22px;
+    -fx-font-weight: 800;
+    -fx-text-fill: -app-text;
+}
+
+.about-version {
+    -fx-text-fill: -app-subtle-text;
+    -fx-font-size: 12px;
+}
+
+.about-description {
+    -fx-text-fill: -app-text;
+}
+
+.about-disclaimer {
+    -fx-text-fill: -app-subtle-text;
+    -fx-font-style: italic;
+    -fx-font-size: 11px;
+}
+
+.about-section-label {
+    -fx-font-weight: 700;
+    -fx-text-fill: -app-text;
+}
+
+.about-link {
+    -fx-text-fill: -app-accent;
+    -fx-padding: 0;
+}
+
+.about-support {
+    -fx-padding: 10;
+    -fx-background-color: -app-surface-alt;
+    -fx-background-radius: 8;
+    -fx-border-color: -app-border;
+    -fx-border-radius: 8;
+}
+
+.about-support-note {
+    -fx-text-fill: -app-subtle-text;
+}
+

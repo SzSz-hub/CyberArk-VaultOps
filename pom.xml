@@ -54,6 +54,99 @@
                 <javafx.platform>mac-aarch64</javafx.platform>
             </properties>
         </profile>
+
+        <!--
+          Native packaging profile. Generates the multi-resolution Windows icon from AppIcon and
+          runs jpackage to produce a native app-image whose window, taskbar AND executable file
+          icon all use it (stage.getIcons() alone cannot set the taskbar/exe icon on Windows).
+
+          Usage:  mvn -P native-package clean package
+          Output: target/dist/CyberArk VaultOps/
+        -->
+        <profile>
+            <id>native-package</id>
+            <build>
+                <plugins>
+                    <!-- 1) Prepare a clean, jar-only input dir and wipe previous output. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>prepare-jpackage-input</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <delete dir="${project.build.directory}/dist"/>
+                                        <delete dir="${project.build.directory}/jpackage-input"/>
+                                        <mkdir dir="${project.build.directory}/jpackage-input"/>
+                                        <copy file="${project.build.directory}/${project.artifactId}-${project.version}.jar"
+                                              todir="${project.build.directory}/jpackage-input"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <!-- 2) Render app-icon.ico (+ PNGs) into the target directory. -->
+                            <execution>
+                                <id>generate-icon</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>IconExporter</mainClass>
+                                    <arguments>
+                                        <argument>${project.build.directory}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <!-- 3) Build a native app-image with jpackage, embedding the icon. -->
+                            <execution>
+                                <id>jpackage</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>jpackage</executable>
+                                    <arguments>
+                                        <argument>--type</argument>
+                                        <argument>app-image</argument>
+                                        <argument>--name</argument>
+                                        <argument>CyberArk VaultOps</argument>
+                                        <argument>--app-version</argument>
+                                        <argument>1.0</argument>
+                                        <argument>--vendor</argument>
+                                        <argument>CyberArk VaultOps</argument>
+                                        <argument>--input</argument>
+                                        <argument>${project.build.directory}/jpackage-input</argument>
+                                        <argument>--main-jar</argument>
+                                        <argument>${project.artifactId}-${project.version}.jar</argument>
+                                        <argument>--main-class</argument>
+                                        <argument>Launcher</argument>
+                                        <argument>--icon</argument>
+                                        <argument>${project.build.directory}/app-icon.ico</argument>
+                                        <argument>--dest</argument>
+                                        <argument>${project.build.directory}/dist</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 
     <dependencies>
