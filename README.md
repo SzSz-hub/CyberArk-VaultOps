@@ -17,6 +17,20 @@ A JavaFX-based administration tool for CyberArk Vault configurations, designed t
   - View component status (enabled/disabled)
   - Identify configuration overrides
   - Click to view detailed component XML
+  - **Right-click (or File / Edit menus) to export, remove or unlink components:**
+    - **Export**: pick a destination folder; each selected component is written to
+      `<folder>/<componentId>/PSM-<componentId>.zip` containing `CC-<componentId>.xml`
+      with the full `<ConnectionComponent>` definition. Multi-select for bulk export.
+    - **Remove component**: unlinks the selected component(s) from every policy in `Policies.xml`
+      **and** deletes their definitions from `PVConfiguration.xml`.
+    - **Unlink from policies**: only removes the references from `Policies.xml`; the definitions in
+      `PVConfiguration.xml` are kept.
+    - Remove and Unlink never modify the source files — updated copies and a `changelog.txt` are
+      written to `output/<timestamp>_<source>/`, ready to import back into CyberArk. Multi-select for
+      bulk operations.
+    - When a removal would leave a policy with no connection component, a dialog prompts for a
+      replacement (choose the component, whether it is enabled/visible, optionally apply the same
+      choice to all further cases, or cancel the whole operation).
 
 - **Policies**: View all access policies by device type
   - See which connection components are assigned
@@ -231,6 +245,7 @@ java -cp target/classes IconExporter target
 - **AppSettings**: Stores user profiles and preferences
 - **PoliciesParser**: DOM-based Policies.xml parser
 - **PVConfigurationParser**: DOM-based PVConfiguration.xml parser
+- **ComponentOperations**: Exports connection components to zip, and removes (Policies.xml + PVConfiguration.xml) or unlinks (Policies.xml only) them with timestamped output + changelog
 - **UI**: JavaFX components (TableView, SplitPane, TreeView)
 - **SideNav**: Profile selection sidebar with drag-reorder
 - **ThemeManager**: CSS theme loading and switching

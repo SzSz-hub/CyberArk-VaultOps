@@ -13,6 +13,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.stage.Stage;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -39,6 +40,7 @@ public class AppController {
     private final Consumer<String> onLoadError;
     private final PVConfigurationParser pvParser = new PVConfigurationParser();
     private final PoliciesParser policiesParser = new PoliciesParser();
+    private final ComponentOperations componentOperations = new ComponentOperations();
     private final Map<String, EnvironmentLoadState> environmentLoadStates = new HashMap<>();
 
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -435,6 +437,169 @@ public class AppController {
                     refreshStatusIndicators();
                 },
                 () -> ui.setConnectionAssignments(List.of()));
+    }
+
+
+    // ------------------------------------------------------------------------------------------ Export
+
+    public void exportConnectionComponents(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            onLoadError.accept("Select at least one connection component to export.");
+            return;
+        }
+
+        String pvConfigPath;
+        try {
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("connection component export", e);
+            return;
+        }
+
+        Path defaultRoot = Paths.get("exports").toAbsolutePath().normalize();
+        try {
+            Files.createDirectories(defaultRoot);
+        } catch (Exception ignored) {
+            // The exports folder is only a suggested starting point for the chooser.
+        }
+
+        File chosen = ui.chooseDirectory("Choose export destination folder", defaultRoot.toFile());
+        if (chosen == null) {
+            return; // User cancelled the chooser.
+        }
+        Path destinationRoot = chosen.toPath();
+
+        List<String> ids = new ArrayList<>();
+        for (PVConfigurationParser.ConnectionComponentEntry entry : entries) {
+            if (entry != null && entry.id() != null && !entry.id().isBlank()) {
+                ids.add(entry.id());
+            }
+        }
+
+        runAsync("connection component export",
+                () -> {
+                    List<ComponentOperations.ExportResult> results = new ArrayList<>();
+                    for (String id : ids) {
+                        results.add(componentOperations.exportConnectionComponent(pvConfigPath, id, destinationRoot));
+                    }
+                    return results;
+                },
+                results -> {
+                    if (results.size() == 1) {
+                        onLoadError.accept("Exported " + results.get(0).componentId() + " to " + results.get(0).zipPath());
+                    } else {
+                        onLoadError.accept("Exported " + results.size() + " connection components to " + destinationRoot);
+                    }
+                },
+                null);
+    }
+
+    // ------------------------------------------------------------------------------ Remove / Unlink
+
+    public void removeConnectionComponents(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
+        performComponentRemoval(entries, true);
+    }
+
+    public void unlinkConnectionComponents(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
+        performComponentRemoval(entries, false);
+    }
+
+    private void performComponentRemoval(List<PVConfigurationParser.ConnectionComponentEntry> entries, boolean alsoRemoveDefinitions) {
+        if (entries == null || entries.isEmpty()) {
+            onLoadError.accept("Select at least one connection component first.");
+            return;
+        }
+
+        String policiesPath;
+        String pvConfigPath;
+        try {
+            policiesPath = getActivePoliciesPath();
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("connection component change", e);
+            return;
+        }
+
+        List<String> ids = collectComponentIds(entries);
+        if (ids.isEmpty()) {
+            onLoadError.accept("Select at least one connection component first.");
+            return;
+        }
+
+        String title = alsoRemoveDefinitions ? "Remove connection components" : "Unlink connection components";
+        String message = alsoRemoveDefinitions
+                ? "Remove " + ids.size() + " connection component(s)?\n\n" + String.join(", ", ids)
+                        + "\n\nThis unlinks them from every policy in Policies.xml AND deletes their definitions "
+                        + "from PVConfiguration.xml. The source files are not modified; updated copies and a "
+                        + "changelog are written to the output folder."
+                : "Unlink " + ids.size() + " connection component(s) from all policies?\n\n" + String.join(", ", ids)
+                        + "\n\nThe PVConfiguration.xml definitions are kept. The source files are not modified; an "
+                        + "updated Policies.xml and a changelog are written to the output folder.";
+        if (!ui.confirm(title, message)) {
+            return;
+        }
+
+        List<String> dropdownIds;
+        try {
+            dropdownIds = loadConnectionComponentIds(pvConfigPath);
+        } catch (Exception e) {
+            dropdownIds = new ArrayList<>();
+        }
+        final List<String> resolverIds = dropdownIds;
+
+        Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
+        String sourceLabel = activeSourceName();
+        String sourceFolder = activeSourceFolder();
+
+        try {
+            ComponentOperations.RemovalResult result = alsoRemoveDefinitions
+                    ? componentOperations.removeConnectionComponents(policiesPath, pvConfigPath, ids, outputRoot,
+                            sourceLabel, sourceFolder, policyId -> ui.showEmptyPolicyDialog(policyId, resolverIds))
+                    : componentOperations.unlinkConnectionComponents(policiesPath, ids, outputRoot,
+                            sourceLabel, sourceFolder, policyId -> ui.showEmptyPolicyDialog(policyId, resolverIds));
+
+            if (result.cancelled()) {
+                onLoadError.accept("Operation cancelled. No files were written.");
+                return;
+            }
+
+            String summary = "Removed " + result.totalRemovedAssignments() + " policy assignment(s)";
+            if (alsoRemoveDefinitions) {
+                summary += " and " + result.removedDefinitions() + " definition(s)";
+            }
+            summary += ". Output written to " + result.outputPolicies().getParent();
+            onLoadError.accept(summary);
+        } catch (Exception e) {
+            reportLoadError("connection component change", e);
+        }
+    }
+
+    private List<String> collectComponentIds(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
+        List<String> ids = new ArrayList<>();
+        for (PVConfigurationParser.ConnectionComponentEntry entry : entries) {
+            if (entry != null && entry.id() != null && !entry.id().isBlank()) {
+                ids.add(entry.id());
+            }
+        }
+        return ids;
+    }
+
+    private List<String> loadConnectionComponentIds(String pvConfigPath) throws Exception {
+        List<String> ids = new ArrayList<>();
+        for (PVConfigurationParser.ConnectionComponentEntry comp : pvParser.GetConnectionComponents(pvConfigPath)) {
+            if (comp.id() != null && !comp.id().isBlank()) {
+                ids.add(comp.id());
+            }
+        }
+        return ids;
+    }
+
+    private String activeSourceFolder() {
+        try {
+            return getActiveFolderPath().toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     public void onPolicySelected(PoliciesParser.PolicyEntry policy) {
