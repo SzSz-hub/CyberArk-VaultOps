@@ -125,6 +125,12 @@ public class UI {
     };
     private java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentSelected = entry -> {
     };
+    private java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentExport = entries -> {
+    };
+    private java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentRemove = entries -> {
+    };
+    private java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentUnlink = entries -> {
+    };
     private java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowSelected = entry -> {
     };
     private java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowDoubleClicked = entry -> {
@@ -163,6 +169,21 @@ public class UI {
     void setOnConnectionComponentSelected(java.util.function.Consumer<PVConfigurationParser.ConnectionComponentEntry> onConnectionComponentSelected) {
         this.onConnectionComponentSelected = onConnectionComponentSelected == null ? entry -> {
         } : onConnectionComponentSelected;
+    }
+
+    void setOnConnectionComponentExport(java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentExport) {
+        this.onConnectionComponentExport = onConnectionComponentExport == null ? entries -> {
+        } : onConnectionComponentExport;
+    }
+
+    void setOnConnectionComponentRemove(java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentRemove) {
+        this.onConnectionComponentRemove = onConnectionComponentRemove == null ? entries -> {
+        } : onConnectionComponentRemove;
+    }
+
+    void setOnConnectionComponentUnlink(java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentUnlink) {
+        this.onConnectionComponentUnlink = onConnectionComponentUnlink == null ? entries -> {
+        } : onConnectionComponentUnlink;
     }
 
     void setOnPolicyRowSelected(java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowSelected) {
@@ -317,16 +338,25 @@ public class UI {
         menuBar.getStyleClass().add("app-menu-bar");
 
         Menu fileMenu = new Menu("File");
+        MenuItem exportComponentsItem = new MenuItem("Export Selected Components...");
+        exportComponentsItem.setOnAction(event -> exportSelectedComponentsFromMenu());
         fileMenu.getItems().addAll(
                 new MenuItem("Open XML file"),
                 new MenuItem("Import PSM Component"),
+                exportComponentsItem,
                 new MenuItem("Export to CSV"),
                 new MenuItem("Exit")
         );
 
         Menu editMenu = new Menu("Edit");
+        MenuItem removeComponentsItem = new MenuItem("Remove Selected Components...");
+        removeComponentsItem.setOnAction(event -> removeSelectedComponentsFromMenu());
+        MenuItem unlinkComponentsItem = new MenuItem("Unlink Selected from Policies...");
+        unlinkComponentsItem.setOnAction(event -> unlinkSelectedComponentsFromMenu());
         editMenu.getItems().addAll(
-                new MenuItem("Order")
+                new MenuItem("Order"),
+                removeComponentsItem,
+                unlinkComponentsItem
         );
 
         Menu settingsMenu = new Menu("Settings");
@@ -399,6 +429,7 @@ public class UI {
             connectionComponentTable.getStyleClass().add("modern-table");
             connectionComponentTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
             connectionComponentTable.setPlaceholder(new Label("No Connection Component loaded"));
+            connectionComponentTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
             connectionComponentTable.getColumns().addAll(
                     makeColumn("ID", PVConfigurationParser.ConnectionComponentEntry::id, 120),
                     makeColumn("Name", PVConfigurationParser.ConnectionComponentEntry::name, 220),
@@ -407,8 +438,17 @@ public class UI {
                     makeIntegerColumn("Assignment Count", PVConfigurationParser.ConnectionComponentEntry::assignmentCount, 120)
             );
 
+            ContextMenu connectionComponentMenu = buildConnectionComponentContextMenu();
+
             connectionComponentTable.setRowFactory(tv -> {
                 TableRow<PVConfigurationParser.ConnectionComponentEntry> row = new TableRow<>();
+                // Right-clicking an unselected row selects just that row before the menu opens.
+                row.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+                    if (event.getButton() == MouseButton.SECONDARY && !row.isEmpty()
+                            && !connectionComponentTable.getSelectionModel().getSelectedItems().contains(row.getItem())) {
+                        connectionComponentTable.getSelectionModel().clearAndSelect(row.getIndex());
+                    }
+                });
                 row.setOnMouseClicked(event -> {
                     if (row.isEmpty()) {
                         return;
@@ -417,6 +457,10 @@ public class UI {
                         onConnectionComponentRowDoubleClicked.accept(row.getItem());
                     }
                 });
+                row.contextMenuProperty().bind(
+                        javafx.beans.binding.Bindings.when(row.emptyProperty())
+                                .then((ContextMenu) null)
+                                .otherwise(connectionComponentMenu));
                 return row;
             });
 
@@ -459,6 +503,165 @@ public class UI {
 
         }
         return connectionComponentContent;
+    }
+
+    private ContextMenu buildConnectionComponentContextMenu() {
+        ContextMenu menu = new ContextMenu();
+
+        MenuItem exportItem = new MenuItem("Export...");
+        exportItem.setOnAction(event -> {
+            List<PVConfigurationParser.ConnectionComponentEntry> selection = getSelectedConnectionComponents();
+            if (!selection.isEmpty()) {
+                onConnectionComponentExport.accept(selection);
+            }
+        });
+
+        MenuItem removeItem = new MenuItem("Remove component...");
+        removeItem.setOnAction(event -> {
+            List<PVConfigurationParser.ConnectionComponentEntry> selection = getSelectedConnectionComponents();
+            if (!selection.isEmpty()) {
+                onConnectionComponentRemove.accept(selection);
+            }
+        });
+
+        MenuItem unlinkItem = new MenuItem("Unlink from policies...");
+        unlinkItem.setOnAction(event -> {
+            List<PVConfigurationParser.ConnectionComponentEntry> selection = getSelectedConnectionComponents();
+            if (!selection.isEmpty()) {
+                onConnectionComponentUnlink.accept(selection);
+            }
+        });
+
+        menu.getItems().addAll(exportItem, removeItem, unlinkItem);
+        return menu;
+    }
+
+    private List<PVConfigurationParser.ConnectionComponentEntry> getSelectedConnectionComponents() {
+        if (connectionComponentTable == null) {
+            return List.of();
+        }
+        return new ArrayList<>(connectionComponentTable.getSelectionModel().getSelectedItems());
+    }
+
+    private void exportSelectedComponentsFromMenu() {
+        if (!ensureConnectionComponentSelection()) {
+            return;
+        }
+        onConnectionComponentExport.accept(getSelectedConnectionComponents());
+    }
+
+    private void removeSelectedComponentsFromMenu() {
+        if (!ensureConnectionComponentSelection()) {
+            return;
+        }
+        onConnectionComponentRemove.accept(getSelectedConnectionComponents());
+    }
+
+    private void unlinkSelectedComponentsFromMenu() {
+        if (!ensureConnectionComponentSelection()) {
+            return;
+        }
+        onConnectionComponentUnlink.accept(getSelectedConnectionComponents());
+    }
+
+    private boolean ensureConnectionComponentSelection() {
+        if (connectionComponentTable == null) {
+            showToast("Open the Connection Components tab and select one or more components first.");
+            return false;
+        }
+        if (connectionComponentTable.getSelectionModel().getSelectedItems().isEmpty()) {
+            showToast("Select one or more connection components first.");
+            return false;
+        }
+        return true;
+    }
+
+    File chooseDirectory(String title, File initialDirectory) {
+        DirectoryChooser chooser = new DirectoryChooser();
+        chooser.setTitle(title == null ? "Choose folder" : title);
+        if (initialDirectory != null && initialDirectory.isDirectory()) {
+            chooser.setInitialDirectory(initialDirectory);
+        }
+        return chooser.showDialog(primaryStage);
+    }
+
+    boolean confirm(String title, String message) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION, message, ButtonType.OK, ButtonType.CANCEL);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        if (primaryStage != null) {
+            alert.initOwner(primaryStage);
+            applyTheme(alert.getDialogPane().getScene());
+        }
+        return alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK;
+    }
+
+    ComponentOperations.EmptyPolicyChoice showEmptyPolicyDialog(String policyId, List<String> availableComponentIds) {
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("Policy would have no connection component");
+
+        Label header = new Label("Policy \"" + policyId + "\" would be left without any connection component.");
+        header.getStyleClass().add("details-title");
+        header.setWrapText(true);
+
+        Label info = new Label("CyberArk requires at least one connection component per policy. "
+                + "Choose a replacement to add, or cancel the whole removal.");
+        info.setWrapText(true);
+
+        ComboBox<String> componentBox = new ComboBox<>(FXCollections.observableArrayList(
+                availableComponentIds == null ? List.of() : availableComponentIds));
+        componentBox.setMaxWidth(Double.MAX_VALUE);
+        if (!componentBox.getItems().isEmpty()) {
+            int rdpIndex = componentBox.getItems().indexOf("PSM-RDP");
+            componentBox.getSelectionModel().select(rdpIndex >= 0 ? rdpIndex : 0);
+        }
+
+        CheckBox enabledBox = new CheckBox("Add as enabled (visible)");
+        enabledBox.setSelected(true);
+
+        CheckBox applyAllBox = new CheckBox("Apply this choice to all further empty policies");
+
+        final ComponentOperations.EmptyPolicyChoice[] result = {ComponentOperations.EmptyPolicyChoice.cancel()};
+
+        Button addButton = new Button("Add Component");
+        addButton.setDefaultButton(true);
+        addButton.disableProperty().bind(componentBox.getSelectionModel().selectedItemProperty().isNull());
+        addButton.setOnAction(event -> {
+            result[0] = ComponentOperations.EmptyPolicyChoice.add(
+                    componentBox.getSelectionModel().getSelectedItem(),
+                    enabledBox.isSelected(),
+                    applyAllBox.isSelected());
+            dialog.close();
+        });
+
+        Button cancelButton = new Button("Cancel Removal");
+        cancelButton.setCancelButton(true);
+        cancelButton.setOnAction(event -> {
+            result[0] = ComponentOperations.EmptyPolicyChoice.cancel();
+            dialog.close();
+        });
+
+        HBox actions = new HBox(8, addButton, cancelButton);
+        actions.getStyleClass().add("dialog-actions");
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox content = new VBox(10,
+                header,
+                info,
+                new Label("Connection component to add:"), componentBox,
+                enabledBox,
+                applyAllBox,
+                actions);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 460, 320);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.showAndWait();
+        return result[0];
     }
 
     private VBox getPoliciesContent() {

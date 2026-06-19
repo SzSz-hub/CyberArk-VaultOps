@@ -20,6 +20,9 @@ public class Main extends Application {
         ui.setOnConnectionComponentTabSelected(controller::loadConnectionComponentIfNeeded);
         ui.setOnConnectionComponentRowDoubleClicked(controller::showConnectionComponentDetails);
         ui.setOnConnectionComponentSelected(controller::onConnectionComponentSelected);
+        ui.setOnConnectionComponentExport(controller::exportConnectionComponents);
+        ui.setOnConnectionComponentRemove(controller::removeConnectionComponents);
+        ui.setOnConnectionComponentUnlink(controller::unlinkConnectionComponents);
         ui.setOnPoliciesTabSelected(controller::loadPoliciesIfNeeded);
         ui.setOnUsagesTabSelected(controller::loadUsageIfNeeded);
         ui.setOnTargetsTabSelected(controller::loadTargetsIfNeeded);
