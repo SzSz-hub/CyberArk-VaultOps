@@ -18,6 +18,16 @@
     -app-toast-bg: rgba(24, 33, 48, 0.96);
     -app-toast-text: #ffffff;
 
+    /* Compare result highlights. Themes override these so the yellow/green/red semantics
+       stay readable on their own background. Light defaults live here. */
+    -app-compare-diff: #fff3bf;
+    -app-compare-only-a: #d3f9d8;
+    -app-compare-only-b: #ffe3e3;
+    -app-compare-diff-selected: #ffe066;
+    -app-compare-only-a-selected: #8ce99a;
+    -app-compare-only-b-selected: #ffa8a8;
+    -app-compare-text: #1b2a44;
+
     -fx-background-color: -app-bg;
     -fx-text-fill: -app-text;
     -fx-accent: -app-accent;
@@ -118,6 +128,11 @@
 
 .status-stale {
     -fx-text-fill: #cf3f3f;
+    -fx-font-weight: 700;
+}
+
+.status-connected {
+    -fx-text-fill: #2e9e5b;
     -fx-font-weight: 700;
 }
 
@@ -271,6 +286,175 @@
     -fx-padding: 4 0 6 0;
 }
 
+/* Compare result rows. Backgrounds and text come from theme variables so the yellow/green/red
+   diff highlights blend with every theme (including dark ones) while staying readable. */
+.table-row-cell.compare-diff {
+    -fx-background-color: -app-compare-diff;
+}
+
+.table-row-cell.compare-only-a {
+    -fx-background-color: -app-compare-only-a;
+}
+
+.table-row-cell.compare-only-b {
+    -fx-background-color: -app-compare-only-b;
+}
+
+.table-row-cell.compare-diff:selected {
+    -fx-background-color: -app-compare-diff-selected;
+}
+
+.table-row-cell.compare-only-a:selected {
+    -fx-background-color: -app-compare-only-a-selected;
+}
+
+.table-row-cell.compare-only-b:selected {
+    -fx-background-color: -app-compare-only-b-selected;
+}
+
+.table-row-cell.compare-diff .table-cell,
+.table-row-cell.compare-only-a .table-cell,
+.table-row-cell.compare-only-b .table-cell {
+    -fx-text-fill: -app-compare-text;
+}
+
+/* Combo box / dropdown */
+.combo-box .arrow-button {
+    -fx-background-color: transparent;
+    -fx-background-radius: 0 9 9 0;
+    -fx-padding: 0 10 0 6;
+}
+
+.combo-box .arrow {
+    -fx-background-color: -app-subtle-text;
+}
+
+.combo-box:hover .arrow,
+.combo-box:showing .arrow {
+    -fx-background-color: -app-accent;
+}
+
+.combo-box > .list-cell {
+    -fx-text-fill: -app-text;
+    -fx-background-color: transparent;
+    -fx-padding: 6 10 6 10;
+}
+
+.combo-box-popup .list-view {
+    -fx-background-color: -app-surface;
+    -fx-border-color: -app-border;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-padding: 4;
+    -fx-effect: dropshadow(gaussian, rgba(20, 30, 50, 0.20), 14, 0, 0, 5);
+}
+
+.combo-box-popup .list-view .list-cell {
+    -fx-padding: 8 10 8 10;
+    -fx-background-radius: 8;
+    -fx-text-fill: -app-text;
+}
+
+.combo-box-popup .list-view .list-cell:filled:hover {
+    -fx-background-color: -app-hover;
+}
+
+.combo-box-popup .list-view .list-cell:filled:selected {
+    -fx-background-color: -app-selection;
+    -fx-text-fill: -app-text;
+}
+
+/* Check box / radio button */
+.check-box,
+.radio-button {
+    -fx-text-fill: -app-text;
+}
+
+.check-box > .box,
+.radio-button > .radio {
+    -fx-background-color: -app-border, -app-surface;
+    -fx-background-insets: 0, 1;
+    -fx-background-radius: 5;
+    -fx-padding: 3;
+}
+
+.radio-button > .radio {
+    -fx-background-radius: 1em;
+}
+
+.check-box:hover > .box,
+.radio-button:hover > .radio {
+    -fx-background-color: -app-accent, -app-surface;
+}
+
+.check-box:selected > .box,
+.radio-button:selected > .radio {
+    -fx-background-color: -app-accent, -app-accent;
+}
+
+.check-box:selected > .box > .mark {
+    -fx-background-color: -app-text-on-accent;
+}
+
+.radio-button:selected > .radio > .dot {
+    -fx-background-color: -app-text-on-accent;
+    -fx-background-insets: 0;
+}
+
+.check-box:focused > .box,
+.radio-button:focused > .radio {
+    -fx-border-color: -app-accent;
+    -fx-border-width: 1;
+    -fx-border-radius: 5;
+}
+
+.radio-button:focused > .radio {
+    -fx-border-radius: 1em;
+}
+
+/* Scroll bars */
+.scroll-bar {
+    -fx-background-color: transparent;
+}
+
+.scroll-bar .track,
+.scroll-bar .track-background {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: -app-border;
+    -fx-background-radius: 8;
+}
+
+.scroll-bar .thumb:hover {
+    -fx-background-color: derive(-app-border, -14%);
+}
+
+.scroll-bar .thumb:pressed {
+    -fx-background-color: -app-accent-soft;
+}
+
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-background-color: transparent;
+}
+
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-background-color: -app-subtle-text;
+}
+
+.scroll-pane,
+.scroll-pane > .viewport {
+    -fx-background-color: transparent;
+}
+
+.corner {
+    -fx-background-color: transparent;
+}
+
 .toast-message {
     -fx-background-color: -app-toast-bg;
     -fx-text-fill: -app-toast-text;
@@ -364,4 +548,3 @@
 .about-support-note {
     -fx-text-fill: -app-subtle-text;
 }
-

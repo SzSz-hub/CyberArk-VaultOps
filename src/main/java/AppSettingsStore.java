@@ -51,6 +51,7 @@ public class AppSettingsStore {
         settings.replaceSourceProfiles(profiles);
         settings.setActiveProfileId(properties.getProperty("activeProfile", ""));
         settings.setTheme(properties.getProperty("theme", AppSettings.DEFAULT_THEME));
+        settings.setDefaultReplacementComponentId(properties.getProperty("defaultReplacementComponent", ""));
         settings.ensureValidActiveProfile();
 
         if (!Files.exists(settingsPath)) {
@@ -81,6 +82,7 @@ public class AppSettingsStore {
         properties.setProperty("profiles.order", order.toString());
         properties.setProperty("activeProfile", valueOrEmpty(settings.getActiveProfileId()));
         properties.setProperty("theme", valueOrEmpty(settings.getTheme()));
+        properties.setProperty("defaultReplacementComponent", valueOrEmpty(settings.getDefaultReplacementComponentId()));
 
         writeAtomically(properties);
     }
@@ -103,7 +105,6 @@ public class AppSettingsStore {
             try {
                 Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException atomicUnsupported) {
-                // Some filesystems (e.g. certain network shares) cannot move atomically.
                 Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
             }
             tempFile = null;
@@ -156,7 +157,6 @@ public class AppSettingsStore {
             }
         }
 
-        // M4: do not silently discard profiles beyond the cap — tell the user some were dropped.
         if (ids.size() > AppSettings.MAX_SOURCES) {
             reportError("Only the first " + AppSettings.MAX_SOURCES + " source profiles were loaded; "
                     + (ids.size() - AppSettings.MAX_SOURCES) + " additional profile(s) in app.properties were ignored.");

@@ -1,8 +1,11 @@
 # CyberArk VaultOps
 
-**Open-source administrator tool for managing CyberArk Self-Hosted PAM configurations and policies.**
+**Open-source administrator tool for managing CyberArk / Idira (Palo Alto Networks) Self-Hosted PAM configurations and policies.**
 
-⚠️ **Disclaimer**: This project is not affiliated with, endorsed by, or supported by CyberArk Software Ltd.
+> ℹ️ **Rebrand note**: CyberArk Self-Hosted PAM was rebranded as **Idira by Palo Alto Networks** (acquired
+> February 2026). The configuration format is unchanged, so this tool works with both — names are used interchangeably throughout.
+
+⚠️ **Disclaimer**: This project is not affiliated with, endorsed by, or supported by CyberArk Software Ltd. or Palo Alto Networks.
 
 ---
 
@@ -48,6 +51,18 @@ A JavaFX-based administration tool for CyberArk Vault configurations, designed t
 - **PSM/PSMP Servers**: Platform Security Manager instances
   - PSM server addresses, ports, and TS Gateway configuration
   - PSMP server mappings and connectivity info
+
+### Compare
+
+Compare two items of the **same kind** side by side (`Compare` menu → *Compare Items...*):
+
+- Pick a kind — **Connection Component**, **Usage**, or **Policy (Platform)** — then choose an item for
+  each of the two sides. The single kind selector prevents mixing kinds (usage vs component).
+- Each side has its own source dropdown, so you can compare the same item across two sources
+  (e.g. `PSM-RDP` in Production vs Test) **or** two different items in one source
+  (e.g. `PSM-google` vs `PSM-google-entraid`).
+- Results show every property as `path = value` with an A/B/Status column, row highlighting for
+  differences and items present on only one side, and a "show only differences" toggle.
 
 ### Source Profile Management
 
@@ -130,6 +145,10 @@ profiles.order=prod-id,test-id,dev-id
 
 # Active theme
 theme=dark
+
+# Default connection component used when removing/unlinking would leave a policy
+# empty (optional; blank = use the first available component alphabetically)
+defaultReplacementComponent=PSM-RDP
 ```
 
 ## Build & Run
@@ -177,6 +196,27 @@ This generates `target/app-icon.ico` (and PNGs) from the same design via `IconEx
 mvn -q compile
 java -cp target/classes IconExporter target
 ```
+
+The packaging type defaults to a portable `app-image` (a folder you can run directly, no installer
+tooling required). Pass `-Djpackage.type=msi` (Windows), `dmg` (macOS) or `deb` (Linux) to build a
+native installer instead — those require the matching platform tooling (WiX, etc.).
+
+### Releases (all operating systems)
+
+`jpackage` can only build for the OS it runs on, so cross-platform release artifacts are produced by
+CI. The `.github/workflows/release.yml` workflow builds an app-image on Windows, Linux, macOS (Intel)
+and macOS (Apple Silicon), archives each with its native tool (`.zip` on Windows, `.tar.gz` elsewhere),
+writes a `SHA-256` checksum next to every archive, and attaches them all to a GitHub Release.
+
+Cut a release by pushing a tag:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+(or run the workflow manually from the Actions tab). Verify a download with its checksum, e.g.
+`shasum -a 256 -c CyberArkVaultOps-1.0.0-linux-x64.tar.gz.sha256`.
 
 ## XML File Requirements
 
@@ -257,4 +297,3 @@ java -cp target/classes IconExporter target
 - Filtering on typed columns is responsive
 - Per-environment caching reduces repeated parsing
 - File staleness checks are lightweight (file metadata only)
-

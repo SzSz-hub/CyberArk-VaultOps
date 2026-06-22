@@ -20,4 +20,13 @@
     -app-row-alt: #162133;
     -app-toast-bg: rgba(11, 17, 28, 0.96);
     -app-toast-text: #f7f9ff;
+
+    /* Compare result highlights (yellow = different, green = only left, red = only right). */
+    -app-compare-diff: #4a3f17;
+    -app-compare-only-a: #1f3d28;
+    -app-compare-only-b: #4a2329;
+    -app-compare-diff-selected: #6b5a20;
+    -app-compare-only-a-selected: #2c5739;
+    -app-compare-only-b-selected: #6a3139;
+    -app-compare-text: #eef4ff;
 }

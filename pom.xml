@@ -15,6 +15,9 @@
         <javafx.version>21.0.10</javafx.version>
         <!-- Default classifier; overridden per-OS by the profiles below so the build is portable. -->
         <javafx.platform>win</javafx.platform>
+        <!-- jpackage output type. "app-image" works on every OS without extra installer tooling; override
+             from the command line (e.g. -Djpackage.type=msi / dmg / deb) to build a native installer. -->
+        <jpackage.type>app-image</jpackage.type>
     </properties>
 
     <profiles>
@@ -122,7 +125,7 @@
                                     <executable>jpackage</executable>
                                     <arguments>
                                         <argument>--type</argument>
-                                        <argument>app-image</argument>
+                                        <argument>${jpackage.type}</argument>
                                         <argument>--name</argument>
                                         <argument>CyberArk VaultOps</argument>
                                         <argument>--app-version</argument>

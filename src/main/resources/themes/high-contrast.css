@@ -14,6 +14,14 @@
     -app-row-alt: #0d0d0d;
     -app-toast-bg: rgba(255, 230, 0, 0.96);
     -app-toast-text: #000000;
+
+    -app-compare-diff: #d9d900;
+    -app-compare-only-a: #00c853;
+    -app-compare-only-b: #ff4d4d;
+    -app-compare-diff-selected: #ffff33;
+    -app-compare-only-a-selected: #33ff85;
+    -app-compare-only-b-selected: #ff8080;
+    -app-compare-text: #000000;
 }
 
 .button,
@@ -38,4 +46,3 @@
 .table-view .filler {
     -fx-border-color: #ffffff;
 }
-

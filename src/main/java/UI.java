@@ -1,7 +1,9 @@
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.collections.transformation.FilteredList;
 import javafx.animation.KeyFrame;
 import javafx.animation.PauseTransition;
 import javafx.animation.Timeline;
@@ -19,6 +21,7 @@ import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.Dragboard;
 import javafx.scene.input.TransferMode;
 import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.util.Duration;
@@ -26,12 +29,20 @@ import javafx.util.Duration;
 import java.awt.Desktop;
 import java.io.File;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class UI {
     static final String TAB_CONNECTION_COMPONENTS = "Connection Components";
@@ -42,14 +53,18 @@ public class UI {
     static final String TAB_PSMPS = "PSMPs";
 
     // Application metadata used by the About window and the main stage title.
-    private static final String APP_NAME = "CyberArk VaultOps";
+    private static final String APP_NAME = "CyberArk / Idira VaultOps";
     private static final String APP_VERSION = "1.0";
     private static final String GITHUB_URL = "https://github.com/SzSz-hub/CyberArk-VaultOps";
+    // CyberArk Self-Hosted PAM was rebranded as Idira by Palo Alto Networks (acquired Feb 2026).
+    // The tool works with both; this label is reused wherever we reference the managed product.
+    private static final String PAM_PRODUCT = "CyberArk / Idira (Palo Alto Networks)";
 
     private final AppSettings settings;
     private final AppSettingsStore settingsStore;
     private final ThemeManager themeManager;
     private final List<ThemeManager.ThemeOption> availableThemes = new ArrayList<>();
+    private final List<WeakReference<Scene>> themedScenes = new ArrayList<>();
 
     private BorderPane root;
     private VBox toastContainer;
@@ -73,9 +88,39 @@ public class UI {
     private Runnable onReloadAllRequested = NO_OP;
     private Runnable onStatusRefreshRequested = NO_OP;
     private Runnable onAppClose = NO_OP;
+    private Runnable onOrderComponents = NO_OP;
+    private Runnable onImportPsmComponent = NO_OP;
+    private Runnable onPvwaConnect = NO_OP;
+    private Runnable onPvwaDisconnect = NO_OP;
+    private Runnable onImportFromFileOnline = NO_OP;
 
     private static Runnable safeRunnable(Runnable runnable) {
         return runnable == null ? NO_OP : runnable;
+    }
+
+    @FunctionalInterface
+    interface CompareItemLoader {
+        void load(String sourceId, Compare.Kind kind,
+                  java.util.function.Consumer<List<Compare.Item>> onLoaded,
+                  java.util.function.Consumer<String> onError);
+    }
+
+    @FunctionalInterface
+    interface CompareRunner {
+        void run(Compare.Kind kind, String sourceAId, Compare.Item itemA, String sourceBId, Compare.Item itemB);
+    }
+
+    private CompareItemLoader compareItemLoader = (sourceId, kind, onLoaded, onError) -> onLoaded.accept(List.of());
+    private CompareRunner compareRunner = (kind, sourceAId, itemA, sourceBId, itemB) -> {};
+
+    void setCompareItemLoader(CompareItemLoader loader) {
+        this.compareItemLoader = loader == null
+                ? (sourceId, kind, onLoaded, onError) -> onLoaded.accept(List.of())
+                : loader;
+    }
+
+    void setCompareRunner(CompareRunner runner) {
+        this.compareRunner = runner == null ? (kind, sourceAId, itemA, sourceBId, itemB) -> {} : runner;
     }
 
     private TableView<PVConfigurationParser.PSMServerEntry> psmTable;
@@ -130,6 +175,8 @@ public class UI {
     private java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentRemove = entries -> {
     };
     private java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentUnlink = entries -> {
+    };
+    private java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentImportOnline = entries -> {
     };
     private java.util.function.Consumer<PoliciesParser.PolicyEntry> onPolicyRowSelected = entry -> {
     };
@@ -255,11 +302,37 @@ public class UI {
         this.onAppClose = safeRunnable(onAppClose);
     }
 
+    void setOnOrderComponents(Runnable onOrderComponents) {
+        this.onOrderComponents = safeRunnable(onOrderComponents);
+    }
+
+    void setOnImportPsmComponent(Runnable onImportPsmComponent) {
+        this.onImportPsmComponent = safeRunnable(onImportPsmComponent);
+    }
+
+    void setOnPvwaConnect(Runnable onPvwaConnect) {
+        this.onPvwaConnect = safeRunnable(onPvwaConnect);
+    }
+
+    void setOnPvwaDisconnect(Runnable onPvwaDisconnect) {
+        this.onPvwaDisconnect = safeRunnable(onPvwaDisconnect);
+    }
+
+    void setOnImportFromFileOnline(Runnable onImportFromFileOnline) {
+        this.onImportFromFileOnline = safeRunnable(onImportFromFileOnline);
+    }
+
+    void setOnConnectionComponentImportOnline(java.util.function.Consumer<List<PVConfigurationParser.ConnectionComponentEntry>> onConnectionComponentImportOnline) {
+        this.onConnectionComponentImportOnline = onConnectionComponentImportOnline == null ? entries -> {
+        } : onConnectionComponentImportOnline;
+    }
+
     private TabPane tabPane;
     private Timeline statusPoller;
     private Label sourceStatusLabel;
     private Label pvLoadStatusLabel;
     private Label policiesLoadStatusLabel;
+    private Label pvwaStatusLabel;
     private TableView<PoliciesParser.PolicyEntry> policiesTable;
     private VBox policiesContent;
     private TableView<PoliciesParser.ComponentAssignmentEntry> connectionAssignmentTable;
@@ -306,7 +379,6 @@ public class UI {
         try {
             stage.getIcons().setAll(AppIcon.createIcons());
         } catch (RuntimeException iconError) {
-            // Icon rendering must never block application startup; fall back to the default icon.
             System.err.println("Could not generate application icon: " + iconError.getMessage());
         }
         StackPane sceneRoot = new StackPane(root);
@@ -338,42 +410,65 @@ public class UI {
         menuBar.getStyleClass().add("app-menu-bar");
 
         Menu fileMenu = new Menu("File");
+        MenuItem importComponentsItem = new MenuItem("Import PSM Component (Offline)...");
+        importComponentsItem.setOnAction(event -> onImportPsmComponent.run());
         MenuItem exportComponentsItem = new MenuItem("Export Selected Components...");
         exportComponentsItem.setOnAction(event -> exportSelectedComponentsFromMenu());
         fileMenu.getItems().addAll(
-                new MenuItem("Open XML file"),
-                new MenuItem("Import PSM Component"),
-                exportComponentsItem,
-                new MenuItem("Export to CSV"),
-                new MenuItem("Exit")
+                importComponentsItem,
+                exportComponentsItem
         );
 
         Menu editMenu = new Menu("Edit");
+        MenuItem orderComponentsItem = new MenuItem("Order...");
+        orderComponentsItem.setOnAction(event -> onOrderComponents.run());
         MenuItem removeComponentsItem = new MenuItem("Remove Selected Components...");
         removeComponentsItem.setOnAction(event -> removeSelectedComponentsFromMenu());
         MenuItem unlinkComponentsItem = new MenuItem("Unlink Selected from Policies...");
         unlinkComponentsItem.setOnAction(event -> unlinkSelectedComponentsFromMenu());
         editMenu.getItems().addAll(
-                new MenuItem("Order"),
+                orderComponentsItem,
                 removeComponentsItem,
                 unlinkComponentsItem
         );
 
+        Menu compareMenu = new Menu("Compare");
+        MenuItem compareItem = new MenuItem("Compare Items...");
+        compareItem.setOnAction(event -> showCompareDialog());
+        compareMenu.getItems().add(compareItem);
+
         Menu settingsMenu = new Menu("Settings");
+        MenuItem generalItem = new MenuItem("General...");
+        generalItem.setOnAction(event -> openGeneralSettingsDialog());
         MenuItem sourcesItem = new MenuItem("Sources");
         sourcesItem.setOnAction(event -> openSourcesSettingsDialog());
         themeMenu = new Menu("Theme");
         refreshThemeMenu();
-        settingsMenu.getItems().addAll(sourcesItem, themeMenu);
+        settingsMenu.getItems().addAll(generalItem, sourcesItem, themeMenu);
 
-        Menu viewMenu = new Menu("View");
+        Menu pvwaMenu = new Menu("PVWA");
+        MenuItem connectItem = new MenuItem("Connect to PVWA...");
+        connectItem.setOnAction(event -> onPvwaConnect.run());
+        MenuItem disconnectItem = new MenuItem("Disconnect from PVWA");
+        disconnectItem.setOnAction(event -> onPvwaDisconnect.run());
+        MenuItem importFileOnlineItem = new MenuItem("Import Component from File (Online)...");
+        importFileOnlineItem.setOnAction(event -> onImportFromFileOnline.run());
+        MenuItem importSelectedOnlineItem = new MenuItem("Import Selected Component(s) (Online)...");
+        importSelectedOnlineItem.setOnAction(event -> importSelectedComponentsOnlineFromMenu());
+        pvwaMenu.getItems().addAll(
+                connectItem,
+                disconnectItem,
+                new SeparatorMenuItem(),
+                importFileOnlineItem,
+                importSelectedOnlineItem
+        );
 
         Menu helpMenu = new Menu("Help");
         MenuItem aboutItem = new MenuItem("About " + APP_NAME);
         aboutItem.setOnAction(event -> openAboutDialog());
         helpMenu.getItems().add(aboutItem);
 
-        menuBar.getMenus().addAll(fileMenu, editMenu, settingsMenu, viewMenu, helpMenu);
+        menuBar.getMenus().addAll(fileMenu, editMenu, compareMenu, settingsMenu, pvwaMenu, helpMenu);
         return menuBar;
     }
 
@@ -442,7 +537,6 @@ public class UI {
 
             connectionComponentTable.setRowFactory(tv -> {
                 TableRow<PVConfigurationParser.ConnectionComponentEntry> row = new TableRow<>();
-                // Right-clicking an unselected row selects just that row before the menu opens.
                 row.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
                     if (event.getButton() == MouseButton.SECONDARY && !row.isEmpty()
                             && !connectionComponentTable.getSelectionModel().getSelectedItems().contains(row.getItem())) {
@@ -481,7 +575,6 @@ public class UI {
                     makeColumn("Overwrites", PoliciesParser.ComponentAssignmentEntry::hasOverrides, 90)
             );
 
-            // Add double-click handler for connection assignments
             connectionAssignmentTable.setRowFactory(tv -> {
                 TableRow<PoliciesParser.ComponentAssignmentEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
@@ -532,7 +625,15 @@ public class UI {
             }
         });
 
-        menu.getItems().addAll(exportItem, removeItem, unlinkItem);
+        MenuItem importOnlineItem = new MenuItem("Import to PVWA (online)...");
+        importOnlineItem.setOnAction(event -> {
+            List<PVConfigurationParser.ConnectionComponentEntry> selection = getSelectedConnectionComponents();
+            if (!selection.isEmpty()) {
+                onConnectionComponentImportOnline.accept(selection);
+            }
+        });
+
+        menu.getItems().addAll(exportItem, removeItem, unlinkItem, new SeparatorMenuItem(), importOnlineItem);
         return menu;
     }
 
@@ -564,6 +665,13 @@ public class UI {
         onConnectionComponentUnlink.accept(getSelectedConnectionComponents());
     }
 
+    private void importSelectedComponentsOnlineFromMenu() {
+        if (!ensureConnectionComponentSelection()) {
+            return;
+        }
+        onConnectionComponentImportOnline.accept(getSelectedConnectionComponents());
+    }
+
     private boolean ensureConnectionComponentSelection() {
         if (connectionComponentTable == null) {
             showToast("Open the Connection Components tab and select one or more components first.");
@@ -583,6 +691,419 @@ public class UI {
             chooser.setInitialDirectory(initialDirectory);
         }
         return chooser.showDialog(primaryStage);
+    }
+
+    List<File> chooseImportFiles() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Select PSM connection component package(s)");
+        chooser.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("Connection component packages (*.zip)", "*.zip"),
+                new FileChooser.ExtensionFilter("All files", "*.*"));
+        File defaultDir = Paths.get("exports").toFile();
+        if (defaultDir.isDirectory()) {
+            chooser.setInitialDirectory(defaultDir);
+        }
+        return chooser.showOpenMultipleDialog(primaryStage);
+    }
+
+    void setPvwaStatus(String text, boolean connected) {
+        if (pvwaStatusLabel == null) {
+            return;
+        }
+        pvwaStatusLabel.setText((text == null || text.isBlank()) ? "PVWA: not connected" : text);
+        if (connected) {
+            if (!pvwaStatusLabel.getStyleClass().contains("status-connected")) {
+                pvwaStatusLabel.getStyleClass().add("status-connected");
+            }
+        } else {
+            pvwaStatusLabel.getStyleClass().remove("status-connected");
+        }
+    }
+
+    PvwaClient.Credentials showPvwaLogonDialog(String defaultBaseUri) {
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("Connect to CyberArk / Idira PVWA");
+
+        Label header = new Label("Authenticate to the PVWA REST API");
+        header.getStyleClass().add("details-title");
+
+        TextField addressField = new TextField(
+                defaultBaseUri == null || defaultBaseUri.isBlank()
+                        ? "https://<pvwa_address>/PasswordVault"
+                        : defaultBaseUri);
+        addressField.setMaxWidth(Double.MAX_VALUE);
+
+        ComboBox<String> authBox = new ComboBox<>(FXCollections.observableArrayList(
+                "CyberArk", "LDAP", "RADIUS", "Windows"));
+        authBox.getSelectionModel().select("CyberArk");
+        authBox.setMaxWidth(Double.MAX_VALUE);
+
+        TextField userField = new TextField();
+        PasswordField passwordField = new PasswordField();
+
+        CheckBox concurrentBox = new CheckBox("Allow concurrent session");
+        concurrentBox.setSelected(true);
+        CheckBox ignoreCertBox = new CheckBox("Ignore certificate errors (self-signed PVWA)");
+        ignoreCertBox.setSelected(true);
+
+        final PvwaClient.Credentials[] result = {null};
+
+        Button connectButton = new Button("Connect");
+        connectButton.setDefaultButton(true);
+        connectButton.setOnAction(event -> {
+            if (addressField.getText() == null || addressField.getText().isBlank()) {
+                showToast("PVWA address is required.");
+                return;
+            }
+            if (userField.getText() == null || userField.getText().isBlank()) {
+                showToast("Username is required.");
+                return;
+            }
+            result[0] = new PvwaClient.Credentials(
+                    addressField.getText().trim(),
+                    authBox.getSelectionModel().getSelectedItem(),
+                    userField.getText().trim(),
+                    passwordField.getText() == null ? "" : passwordField.getText(),
+                    concurrentBox.isSelected(),
+                    ignoreCertBox.isSelected());
+            dialog.close();
+        });
+
+        Button cancelButton = new Button("Cancel");
+        cancelButton.setCancelButton(true);
+        cancelButton.setOnAction(event -> dialog.close());
+
+        HBox actions = new HBox(8, connectButton, cancelButton);
+        actions.getStyleClass().add("dialog-actions");
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox content = new VBox(8,
+                header,
+                new Label("PVWA base URL"), addressField,
+                new Label("Authentication method"), authBox,
+                new Label("Username"), userField,
+                new Label("Password"), passwordField,
+                concurrentBox,
+                ignoreCertBox,
+                actions);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 460, 470);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.showAndWait();
+        return result[0];
+    }
+
+    List<ComponentOperations.OrderScope> showOrderComponentsDialog(
+            List<ComponentOperations.OrderScope> scopes,
+            Map<String, String> displayNames) {
+        if (scopes == null || scopes.isEmpty()) {
+            return null;
+        }
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("Order Connection Components");
+
+        Map<String, ObservableList<String>> working = new LinkedHashMap<>();
+        for (ComponentOperations.OrderScope scope : scopes) {
+            working.put(scope.key(), FXCollections.observableArrayList(scope.componentIds()));
+        }
+
+        final ComponentOperations.OrderScope[] currentScope = {scopes.get(0)};
+
+        List<ComponentOperations.OrderScope> sortedScopes = new ArrayList<>(scopes);
+        sortedScopes.sort(Comparator.comparing(s -> s.label() == null ? "" : s.label().toLowerCase()));
+        ObservableList<ComponentOperations.OrderScope> allScopes =
+                FXCollections.observableArrayList(sortedScopes);
+        FilteredList<ComponentOperations.OrderScope> filteredScopes = new FilteredList<>(allScopes, s -> true);
+
+        TextField scopeFilter = new TextField();
+        scopeFilter.setPromptText("Type to filter " + scopes.size() + " scopes...");
+        scopeFilter.setMaxWidth(Double.MAX_VALUE);
+
+        ComboBox<ComponentOperations.OrderScope> scopeBox = new ComboBox<>(filteredScopes);
+        scopeBox.setMaxWidth(Double.MAX_VALUE);
+        scopeBox.setVisibleRowCount(15);
+        scopeBox.setConverter(new javafx.util.StringConverter<>() {
+            @Override
+            public String toString(ComponentOperations.OrderScope scope) {
+                return scope == null ? "" : scope.label();
+            }
+
+            @Override
+            public ComponentOperations.OrderScope fromString(String text) {
+                return null;
+            }
+        });
+
+        ListView<String> listView = new ListView<>();
+        listView.getStyleClass().add("source-settings-list");
+        listView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+        listView.setItems(working.get(currentScope[0].key()));
+        listView.setCellFactory(lv -> new ListCell<>() {
+            @Override
+            protected void updateItem(String id, boolean empty) {
+                super.updateItem(id, empty);
+                if (empty || id == null) {
+                    setText(null);
+                    return;
+                }
+                String name = displayNames == null ? null : displayNames.get(id);
+                boolean byName = currentScope[0] != null && currentScope[0].sortByDisplayName();
+                if (byName && name != null && !name.isBlank()) {
+                    setText(name + "  [" + id + "]");
+                } else {
+                    setText(name == null || name.isBlank() ? id : id + "  (" + name + ")");
+                }
+            }
+        });
+
+        scopeBox.getSelectionModel().selectedItemProperty().addListener((obs, oldScope, newScope) -> {
+            if (newScope != null) {
+                currentScope[0] = newScope;
+                listView.setItems(working.get(newScope.key()));
+                listView.refresh();
+            }
+        });
+
+        scopeFilter.textProperty().addListener((obs, oldText, newText) -> {
+            String query = newText == null ? "" : newText.trim().toLowerCase();
+            ComponentOperations.OrderScope selected = scopeBox.getSelectionModel().getSelectedItem();
+            filteredScopes.setPredicate(scope -> query.isEmpty()
+                    || (scope.label() != null && scope.label().toLowerCase().contains(query)));
+            if (selected != null && filteredScopes.contains(selected)) {
+                scopeBox.getSelectionModel().select(selected);
+            } else if (!filteredScopes.isEmpty()) {
+                scopeBox.getSelectionModel().select(0);
+            }
+        });
+
+        scopeBox.getSelectionModel().select(0);
+
+        java.util.function.Supplier<Comparator<String>> comparatorForScope = () ->
+                scopeComparator(currentScope[0] != null && currentScope[0].sortByDisplayName(), displayNames);
+
+        ContextMenu listContextMenu = new ContextMenu();
+        MenuItem sortSelectedItem = new MenuItem("Sort selected only");
+        sortSelectedItem.setOnAction(event -> sortSelectionOnly(listView, comparatorForScope.get()));
+        MenuItem sortSelectedIntoItem = new MenuItem("Sort selected into the list");
+        sortSelectedIntoItem.setOnAction(event -> sortSelectionIntoList(listView, comparatorForScope.get()));
+        MenuItem sortExceptSelectedItem = new MenuItem("Sort everything except selected");
+        sortExceptSelectedItem.setOnAction(event -> sortAllExceptSelection(listView, comparatorForScope.get()));
+        listContextMenu.getItems().addAll(sortSelectedItem, sortSelectedIntoItem, sortExceptSelectedItem);
+        listView.setContextMenu(listContextMenu);
+
+        Button sortThisButton = new Button("Sort this scope (A\u2192Z)");
+        sortThisButton.setOnAction(event -> sortScope(listView.getItems(),
+                currentScope[0] != null && currentScope[0].sortByDisplayName(), displayNames));
+
+        Button sortAllButton = new Button("Sort ALL scopes (A\u2192Z)");
+        sortAllButton.setOnAction(event -> {
+            for (ComponentOperations.OrderScope scope : scopes) {
+                sortScope(working.get(scope.key()), scope.sortByDisplayName(), displayNames);
+            }
+        });
+
+        Button moveUpButton = new Button("Move up");
+        moveUpButton.setOnAction(event -> moveStringSelection(listView, -1));
+
+        Button moveDownButton = new Button("Move down");
+        moveDownButton.setOnAction(event -> moveStringSelection(listView, 1));
+
+        HBox toolbar = new HBox(8, sortThisButton, sortAllButton,
+                new Separator(Orientation.VERTICAL), moveUpButton, moveDownButton);
+        toolbar.setAlignment(Pos.CENTER_LEFT);
+
+        Label info = new Label("PVConfiguration sorts by Id, policies by DisplayName. Sorted copies and a "
+                + "changelog are written to the output folder; the originals are untouched.");
+        info.setWrapText(true);
+
+        final boolean[] saved = {false};
+
+        Button saveButton = new Button("Save to output");
+        saveButton.setDefaultButton(true);
+        saveButton.setOnAction(event -> {
+            saved[0] = true;
+            dialog.close();
+        });
+
+        Button cancelButton = new Button("Cancel");
+        cancelButton.setCancelButton(true);
+        cancelButton.setOnAction(event -> dialog.close());
+
+        HBox actions = new HBox(8, saveButton, cancelButton);
+        actions.getStyleClass().add("dialog-actions");
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        Label scopeLabel = new Label("1. Pick a scope to order (type to filter):");
+        Label componentsLabel = new Label("2. Reorder its components (right-click to sort a selection):");
+
+        VBox.setVgrow(listView, Priority.ALWAYS);
+
+        VBox content = new VBox(8, info,
+                scopeLabel, scopeFilter, scopeBox,
+                componentsLabel, toolbar, listView,
+                actions);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 660, 640);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.setResizable(true);
+        dialog.showAndWait();
+
+        if (!saved[0]) {
+            return null;
+        }
+        List<ComponentOperations.OrderScope> result = new ArrayList<>();
+        for (ComponentOperations.OrderScope scope : scopes) {
+            result.add(new ComponentOperations.OrderScope(
+                    scope.key(), scope.label(), new ArrayList<>(working.get(scope.key())), scope.sortByDisplayName()));
+        }
+        return result;
+    }
+
+    private static String scopeSortKey(String id, boolean byDisplayName, Map<String, String> displayNames) {
+        if (byDisplayName) {
+            String name = displayNames == null ? null : displayNames.get(id);
+            String key = (name == null || name.isBlank()) ? id : name;
+            return key == null ? "" : key.toLowerCase();
+        }
+        return id == null ? "" : id.toLowerCase();
+    }
+
+    private static Comparator<String> scopeComparator(boolean byDisplayName, Map<String, String> displayNames) {
+        return Comparator.comparing(id -> scopeSortKey(id, byDisplayName, displayNames));
+    }
+
+    private static void sortScope(ObservableList<String> ids, boolean byDisplayName, Map<String, String> displayNames) {
+        if (ids != null) {
+            ids.sort(scopeComparator(byDisplayName, displayNames));
+        }
+    }
+
+    // Sort only the selected items, keeping them in the slots the selection currently occupies.
+    private static void sortSelectionOnly(ListView<String> listView, Comparator<String> comparator) {
+        ObservableList<String> items = listView.getItems();
+        List<Integer> indices = new ArrayList<>(listView.getSelectionModel().getSelectedIndices());
+        if (indices.size() < 2) {
+            return;
+        }
+        Collections.sort(indices);
+        List<String> picked = new ArrayList<>();
+        for (int index : indices) {
+            picked.add(items.get(index));
+        }
+        picked.sort(comparator);
+        for (int j = 0; j < indices.size(); j++) {
+            items.set(indices.get(j), picked.get(j));
+        }
+        listView.getSelectionModel().clearSelection();
+        for (int index : indices) {
+            listView.getSelectionModel().select(index);
+        }
+    }
+
+    // Pin the selected items where they are; sort every other item into the remaining slots.
+    private static void sortAllExceptSelection(ListView<String> listView, Comparator<String> comparator) {
+        ObservableList<String> items = listView.getItems();
+        Set<Integer> selected = new HashSet<>(listView.getSelectionModel().getSelectedIndices());
+        if (selected.isEmpty()) {
+            items.sort(comparator);
+            return;
+        }
+        List<String> rest = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            if (!selected.contains(i)) {
+                rest.add(items.get(i));
+            }
+        }
+        rest.sort(comparator);
+        int r = 0;
+        for (int i = 0; i < items.size(); i++) {
+            if (!selected.contains(i)) {
+                items.set(i, rest.get(r++));
+            }
+        }
+    }
+
+    // Move the selected items to their sorted position relative to the (kept) non-selected items.
+    private static void sortSelectionIntoList(ListView<String> listView, Comparator<String> comparator) {
+        ObservableList<String> items = listView.getItems();
+        List<Integer> indices = new ArrayList<>(listView.getSelectionModel().getSelectedIndices());
+        if (indices.isEmpty()) {
+            return;
+        }
+        Set<Integer> selected = new HashSet<>(indices);
+        List<String> picked = new ArrayList<>();
+        for (int index : indices) {
+            picked.add(items.get(index));
+        }
+        picked.sort(comparator);
+
+        List<String> merged = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            if (!selected.contains(i)) {
+                merged.add(items.get(i));
+            }
+        }
+        for (String value : picked) {
+            int pos = 0;
+            while (pos < merged.size() && comparator.compare(merged.get(pos), value) <= 0) {
+                pos++;
+            }
+            merged.add(pos, value);
+        }
+        items.setAll(merged);
+
+        listView.getSelectionModel().clearSelection();
+        for (String value : picked) {
+            int index = merged.indexOf(value);
+            if (index >= 0) {
+                listView.getSelectionModel().select(index);
+            }
+        }
+    }
+
+    private void moveStringSelection(ListView<String> listView, int delta) {
+        ObservableList<String> items = listView.getItems();
+        if (items == null) {
+            return;
+        }
+        List<Integer> indices = new ArrayList<>(listView.getSelectionModel().getSelectedIndices());
+        if (indices.isEmpty()) {
+            return;
+        }
+
+        if (delta < 0) {
+            Collections.sort(indices);
+            if (indices.get(0) <= 0) {
+                return;
+            }
+            for (int index : indices) {
+                items.add(index - 1, items.remove(index));
+            }
+        } else {
+            indices.sort(Collections.reverseOrder());
+            if (indices.get(0) >= items.size() - 1) {
+                return;
+            }
+            for (int index : indices) {
+                items.add(index + 1, items.remove(index));
+            }
+        }
+
+        listView.getSelectionModel().clearSelection();
+        for (int index : indices) {
+            listView.getSelectionModel().select(index + delta);
+        }
     }
 
     boolean confirm(String title, String message) {
@@ -606,17 +1127,42 @@ public class UI {
         header.getStyleClass().add("details-title");
         header.setWrapText(true);
 
-        Label info = new Label("CyberArk requires at least one connection component per policy. "
+        Label info = new Label("CyberArk / Idira requires at least one connection component per policy. "
                 + "Choose a replacement to add, or cancel the whole removal.");
         info.setWrapText(true);
 
-        ComboBox<String> componentBox = new ComboBox<>(FXCollections.observableArrayList(
-                availableComponentIds == null ? List.of() : availableComponentIds));
+        // Components are listed alphabetically; the filter narrows down a long list (300+) quickly.
+        List<String> sortedComponentIds = new ArrayList<>(
+                availableComponentIds == null ? List.of() : availableComponentIds);
+        sortedComponentIds.sort(String.CASE_INSENSITIVE_ORDER);
+        ObservableList<String> allComponentIds = FXCollections.observableArrayList(sortedComponentIds);
+        FilteredList<String> filteredComponentIds = new FilteredList<>(allComponentIds, id -> true);
+
+        TextField componentFilter = new TextField();
+        componentFilter.setPromptText("Type to filter " + allComponentIds.size() + " components...");
+        componentFilter.setMaxWidth(Double.MAX_VALUE);
+
+        ComboBox<String> componentBox = new ComboBox<>(filteredComponentIds);
         componentBox.setMaxWidth(Double.MAX_VALUE);
-        if (!componentBox.getItems().isEmpty()) {
-            int rdpIndex = componentBox.getItems().indexOf("PSM-RDP");
-            componentBox.getSelectionModel().select(rdpIndex >= 0 ? rdpIndex : 0);
+        componentBox.setVisibleRowCount(15);
+        if (!allComponentIds.isEmpty()) {
+            // Prefer the component configured in Source Settings; otherwise fall back to the first one.
+            String configuredDefault = settings == null ? null : settings.getDefaultReplacementComponentId();
+            int defaultIndex = (configuredDefault == null || configuredDefault.isBlank())
+                    ? -1 : componentBox.getItems().indexOf(configuredDefault);
+            componentBox.getSelectionModel().select(defaultIndex >= 0 ? defaultIndex : 0);
         }
+
+        componentFilter.textProperty().addListener((obs, oldText, newText) -> {
+            String query = newText == null ? "" : newText.trim().toLowerCase();
+            String selected = componentBox.getSelectionModel().getSelectedItem();
+            filteredComponentIds.setPredicate(id -> query.isEmpty() || id.toLowerCase().contains(query));
+            if (selected != null && filteredComponentIds.contains(selected)) {
+                componentBox.getSelectionModel().select(selected);
+            } else if (!filteredComponentIds.isEmpty()) {
+                componentBox.getSelectionModel().select(0);
+            }
+        });
 
         CheckBox enabledBox = new CheckBox("Add as enabled (visible)");
         enabledBox.setSelected(true);
@@ -650,18 +1196,341 @@ public class UI {
         VBox content = new VBox(10,
                 header,
                 info,
-                new Label("Connection component to add:"), componentBox,
+                new Label("Connection component to add:"), componentFilter, componentBox,
                 enabledBox,
                 applyAllBox,
                 actions);
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 460, 320);
+        Scene scene = new Scene(content, 460, 360);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.showAndWait();
         return result[0];
+    }
+
+    // ---------------------------------------------------------------------------------------- compare
+
+    private javafx.util.StringConverter<AppSettings.SourceProfile> profileConverter() {
+        return new javafx.util.StringConverter<>() {
+            @Override
+            public String toString(AppSettings.SourceProfile profile) {
+                return profile == null ? "" : displayName(profile);
+            }
+
+            @Override
+            public AppSettings.SourceProfile fromString(String text) {
+                return null;
+            }
+        };
+    }
+
+    private final class CompareSide {
+        private final ComboBox<AppSettings.SourceProfile> sourceBox = new ComboBox<>();
+        private final TextField itemFilter = new TextField();
+        private final ComboBox<Compare.Item> itemBox = new ComboBox<>();
+        private final ObservableList<Compare.Item> allItems = FXCollections.observableArrayList();
+        private final FilteredList<Compare.Item> filteredItems = new FilteredList<>(allItems, item -> true);
+        private final Label status = new Label();
+        private final VBox node;
+        private int requestToken;
+
+        private CompareSide(String tag, List<AppSettings.SourceProfile> profiles,
+                            java.util.function.Supplier<Compare.Kind> kindSupplier) {
+            sourceBox.setItems(FXCollections.observableArrayList(profiles));
+            sourceBox.setConverter(profileConverter());
+            sourceBox.setMaxWidth(Double.MAX_VALUE);
+            sourceBox.setVisibleRowCount(15);
+
+            itemFilter.setPromptText("Type to filter items\u2026");
+            itemFilter.setMaxWidth(Double.MAX_VALUE);
+
+            itemBox.setItems(filteredItems);
+            itemBox.setMaxWidth(Double.MAX_VALUE);
+            itemBox.setVisibleRowCount(15);
+
+            itemFilter.textProperty().addListener((obs, oldText, newText) -> {
+                String query = newText == null ? "" : newText.trim().toLowerCase();
+                Compare.Item selected = itemBox.getSelectionModel().getSelectedItem();
+                filteredItems.setPredicate(item -> query.isEmpty()
+                        || item.toString().toLowerCase().contains(query));
+                if (selected != null && filteredItems.contains(selected)) {
+                    itemBox.getSelectionModel().select(selected);
+                } else if (!filteredItems.isEmpty()) {
+                    itemBox.getSelectionModel().select(0);
+                }
+            });
+
+            status.getStyleClass().add("preview-note");
+            status.setWrapText(true);
+
+            Label title = new Label("Side " + tag);
+            title.getStyleClass().add("about-section-label");
+
+            node = new VBox(6, title, new Label("Source"), sourceBox,
+                    new Label("Item"), itemFilter, itemBox, status);
+            node.getStyleClass().add("about-support");
+
+            if (!profiles.isEmpty()) {
+                sourceBox.getSelectionModel().select(0);
+            }
+            sourceBox.getSelectionModel().selectedItemProperty().addListener(
+                    (obs, oldValue, newValue) -> reload(kindSupplier.get()));
+        }
+
+        private void reload(Compare.Kind kind) {
+            AppSettings.SourceProfile profile = sourceBox.getSelectionModel().getSelectedItem();
+            allItems.clear();
+            itemBox.setDisable(true);
+            if (profile == null || kind == null) {
+                status.setText("");
+                return;
+            }
+            int token = ++requestToken;
+            status.setText("Loading\u2026");
+            compareItemLoader.load(profile.id(), kind,
+                    items -> {
+                        if (token != requestToken) {
+                            return;
+                        }
+                        allItems.setAll(items);
+                        itemBox.setDisable(items.isEmpty());
+                        if (!filteredItems.isEmpty()) {
+                            itemBox.getSelectionModel().select(0);
+                        }
+                        status.setText(items.isEmpty() ? "No items found." : items.size() + " item(s).");
+                    },
+                    error -> {
+                        if (token != requestToken) {
+                            return;
+                        }
+                        itemBox.setDisable(true);
+                        status.setText(error);
+                    });
+        }
+
+        private String sourceId() {
+            AppSettings.SourceProfile profile = sourceBox.getSelectionModel().getSelectedItem();
+            return profile == null ? null : profile.id();
+        }
+
+        private Compare.Item item() {
+            return itemBox.getSelectionModel().getSelectedItem();
+        }
+    }
+
+    private void showCompareDialog() {
+        List<AppSettings.SourceProfile> profiles = settings.getSourceProfiles();
+        if (profiles.isEmpty()) {
+            showToast("Add a source profile first (Settings \u2192 Sources).");
+            return;
+        }
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("Compare Configuration Items");
+
+        Label header = new Label("Compare two items of the same kind \u2014 across sources or within one source.");
+        header.getStyleClass().add("details-title");
+        header.setWrapText(true);
+
+        ComboBox<Compare.Kind> kindBox = new ComboBox<>(FXCollections.observableArrayList(Compare.Kind.values()));
+        kindBox.getSelectionModel().select(Compare.Kind.CONNECTION_COMPONENT);
+        kindBox.setMaxWidth(Double.MAX_VALUE);
+
+        CompareSide sideA = new CompareSide("A", profiles, kindBox::getValue);
+        CompareSide sideB = new CompareSide("B", profiles, kindBox::getValue);
+
+        kindBox.getSelectionModel().selectedItemProperty().addListener((obs, oldKind, newKind) -> {
+            sideA.reload(newKind);
+            sideB.reload(newKind);
+        });
+        sideA.reload(kindBox.getValue());
+        sideB.reload(kindBox.getValue());
+
+        HBox sides = new HBox(12, sideA.node, sideB.node);
+        HBox.setHgrow(sideA.node, Priority.ALWAYS);
+        HBox.setHgrow(sideB.node, Priority.ALWAYS);
+
+        Button compareButton = new Button("Compare");
+        compareButton.setDefaultButton(true);
+        compareButton.setOnAction(event -> {
+            if (sideA.item() == null || sideB.item() == null) {
+                showToast("Pick an item on both sides.");
+                return;
+            }
+            compareRunner.run(kindBox.getValue(), sideA.sourceId(), sideA.item(), sideB.sourceId(), sideB.item());
+            dialog.close();
+        });
+
+        Button cancelButton = new Button("Cancel");
+        cancelButton.setCancelButton(true);
+        cancelButton.setOnAction(event -> dialog.close());
+
+        HBox actions = new HBox(8, compareButton, cancelButton);
+        actions.getStyleClass().add("dialog-actions");
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox content = new VBox(12, header, new Label("Kind"), kindBox, sides, actions);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 720, 470);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.show();
+    }
+
+    void showCompareResult(Compare.Result result) {
+        if (result == null) {
+            return;
+        }
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.setTitle("Compare \u2014 " + result.title());
+        if (primaryStage != null) {
+            dialog.getIcons().setAll(primaryStage.getIcons());
+        }
+
+        Label title = new Label(result.title());
+        title.getStyleClass().add("details-title");
+        Label subtitle = new Label("A:  " + result.subtitleA() + "\nB:  " + result.subtitleB());
+        subtitle.getStyleClass().add("details-source");
+
+        Label summary = new Label(result.differences() == 0
+                ? "Identical \u2014 no differences."
+                : result.differences() + " difference(s) found.");
+        summary.getStyleClass().add(result.differences() == 0 ? "status-connected" : "status-stale");
+
+        CheckBox onlyDifferences = new CheckBox("Show only differences");
+
+        TextField searchField = new TextField();
+        searchField.setPromptText("Filter properties / values\u2026");
+        searchField.setMaxWidth(Double.MAX_VALUE);
+
+        ObservableList<Compare.Row> allRows = FXCollections.observableArrayList(result.rows());
+        FilteredList<Compare.Row> filteredRows = new FilteredList<>(allRows, row -> true);
+        Runnable applyPredicate = () -> {
+            String query = searchField.getText() == null ? "" : searchField.getText().trim().toLowerCase();
+            boolean onlyDiff = onlyDifferences.isSelected();
+            filteredRows.setPredicate(row -> {
+                if (onlyDiff && row.status() == Compare.Status.EQUAL) {
+                    return false;
+                }
+                if (query.isEmpty()) {
+                    return true;
+                }
+                return contains(row.property(), query)
+                        || contains(row.valueA(), query)
+                        || contains(row.valueB(), query);
+            });
+        };
+        searchField.textProperty().addListener((obs, oldValue, newValue) -> applyPredicate.run());
+        onlyDifferences.selectedProperty().addListener((obs, oldValue, newValue) -> applyPredicate.run());
+
+        javafx.collections.transformation.SortedList<Compare.Row> sortedRows =
+                new javafx.collections.transformation.SortedList<>(filteredRows);
+
+        TableView<Compare.Row> table = new TableView<>(sortedRows);
+        sortedRows.comparatorProperty().bind(table.comparatorProperty());
+        table.getStyleClass().add("modern-table");
+        table.setColumnResizePolicy(TableView.UNCONSTRAINED_RESIZE_POLICY);
+        table.setPlaceholder(new Label("No properties"));
+
+        TableColumn<Compare.Row, String> propertyColumn = new TableColumn<>("Property");
+        propertyColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().property()));
+        propertyColumn.setCellFactory(wrappingCellFactory());
+
+        TableColumn<Compare.Row, String> valueAColumn = new TableColumn<>("A");
+        valueAColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().valueA()));
+        valueAColumn.setCellFactory(wrappingCellFactory());
+
+        TableColumn<Compare.Row, String> valueBColumn = new TableColumn<>("B");
+        valueBColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().valueB()));
+        valueBColumn.setCellFactory(wrappingCellFactory());
+
+        TableColumn<Compare.Row, String> statusColumn = new TableColumn<>("Status");
+        statusColumn.setPrefWidth(110);
+        statusColumn.setMinWidth(110);
+        statusColumn.setMaxWidth(110);
+        statusColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(compareStatusLabel(data.getValue().status())));
+
+        final double statusWidth = 110;
+        final double scrollbarAllowance = 18;
+        javafx.beans.binding.DoubleBinding available =
+                table.widthProperty().subtract(statusWidth + scrollbarAllowance);
+        propertyColumn.prefWidthProperty().bind(available.multiply(0.34));
+        valueAColumn.prefWidthProperty().bind(available.multiply(0.33));
+        valueBColumn.prefWidthProperty().bind(available.multiply(0.33));
+
+        table.getColumns().addAll(propertyColumn, valueAColumn, valueBColumn, statusColumn);
+        table.setRowFactory(tv -> new TableRow<>() {
+            @Override
+            protected void updateItem(Compare.Row row, boolean empty) {
+                super.updateItem(row, empty);
+                getStyleClass().removeAll("compare-diff", "compare-only-a", "compare-only-b");
+                if (!empty && row != null) {
+                    switch (row.status()) {
+                        case DIFFERENT -> getStyleClass().add("compare-diff");
+                        case ONLY_A -> getStyleClass().add("compare-only-a");
+                        case ONLY_B -> getStyleClass().add("compare-only-b");
+                        default -> { }
+                    }
+                }
+            }
+        });
+        VBox.setVgrow(table, Priority.ALWAYS);
+
+        HBox controls = new HBox(12, summary, onlyDifferences, searchField);
+        controls.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(searchField, Priority.ALWAYS);
+
+        VBox headerBox = new VBox(2, title, subtitle);
+        headerBox.getStyleClass().add("details-header");
+
+        VBox content = new VBox(10, headerBox, controls, table);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 980, 720);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.show();
+    }
+
+    private static boolean contains(String value, String lowerCaseQuery) {
+        return value != null && value.toLowerCase().contains(lowerCaseQuery);
+    }
+
+    private static <S> javafx.util.Callback<TableColumn<S, String>, TableCell<S, String>> wrappingCellFactory() {
+        return column -> {
+            TableCell<S, String> cell = new TableCell<>() {
+                @Override
+                protected void updateItem(String value, boolean empty) {
+                    super.updateItem(value, empty);
+                    setText(empty ? null : value);
+                }
+            };
+            cell.setWrapText(true);
+            cell.setAlignment(Pos.TOP_LEFT);
+            return cell;
+        };
+    }
+
+    private static String compareStatusLabel(Compare.Status status) {
+        return switch (status) {
+            case EQUAL -> "Equal";
+            case DIFFERENT -> "Different";
+            case ONLY_A -> "Only A";
+            case ONLY_B -> "Only B";
+        };
     }
 
     private VBox getPoliciesContent() {
@@ -677,7 +1546,7 @@ public class UI {
                     makeColumn("PlatformBaseID", PoliciesParser.PolicyEntry::platformId, 130),
                     makeColumn("Policy ID", PoliciesParser.PolicyEntry::policyId, 130),
                     makeColumn("Policy Name", PoliciesParser.PolicyEntry::policyName, 170),
-                    makeColumn("Component Assigned", PoliciesParser.PolicyEntry::componentAssigned, 110),
+                    makeIntegerColumn("Components", PoliciesParser.PolicyEntry::componentCount, 110),
                     makeColumn("Overwrites", PoliciesParser.PolicyEntry::hasOverrides, 90)
             );
 
@@ -742,7 +1611,6 @@ public class UI {
 
             alterAddressTable.setRowFactory(tv -> {
                 TableRow<PoliciesParser.AlteredAddressEntry> row = new TableRow<>();
-                // Consume right-button press so JavaFX does not change row selection.
                 row.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
                     if (event.getButton() == MouseButton.SECONDARY) {
                         event.consume();
@@ -770,7 +1638,6 @@ public class UI {
                 return row;
             });
 
-            // Handle selection changes on left table
             alterAddressTable.getSelectionModel().selectedItemProperty().addListener((obs, oldVal, newVal) -> {
                 if (newVal != null) {
                     onAlteredAddressSelected.accept(newVal.address());
@@ -832,7 +1699,6 @@ public class UI {
                     makeColumn("Overwrites", PoliciesParser.UsagePolicyEntry::hasOverrides, 90)
             );
 
-            // Add double-click handler for usage policy assignments
             usagePolicyAssignmentsTable.setRowFactory(tv -> {
                 TableRow<PoliciesParser.UsagePolicyEntry> row = new TableRow<>();
                 row.setOnMouseClicked(event -> {
@@ -912,6 +1778,9 @@ public class UI {
         policiesLoadStatusLabel = new Label("Policies.xml: never loaded");
         policiesLoadStatusLabel.getStyleClass().add("status-load-label");
 
+        pvwaStatusLabel = new Label("PVWA: not connected");
+        pvwaStatusLabel.getStyleClass().add("status-load-label");
+
         Button updateBtn = new Button("Update Current");
         updateBtn.setOnAction(event -> onRefreshCurrentRequested.run());
 
@@ -925,6 +1794,7 @@ public class UI {
                 sourceStatusLabel,
                 pvLoadStatusLabel,
                 policiesLoadStatusLabel,
+                pvwaStatusLabel,
                 spacer,
                 updateBtn,
                 reloadAllBtn
@@ -1075,6 +1945,11 @@ public class UI {
         if (scene == null) {
             return;
         }
+        registerThemedScene(scene);
+        setSceneStylesheets(scene, theme);
+    }
+
+    private void setSceneStylesheets(Scene scene, ThemeManager.ThemeOption theme) {
         if (availableThemes.isEmpty()) {
             refreshAvailableThemes();
         }
@@ -1085,6 +1960,27 @@ public class UI {
         }
 
         scene.getStylesheets().setAll(themeManager.buildStylesheetUris(theme));
+    }
+
+    private void registerThemedScene(Scene scene) {
+        themedScenes.removeIf(ref -> {
+            Scene existing = ref.get();
+            return existing == null || existing == scene;
+        });
+        themedScenes.add(new WeakReference<>(scene));
+    }
+
+    private void reapplyThemeToOpenWindows(ThemeManager.ThemeOption theme) {
+        themedScenes.removeIf(ref -> {
+            Scene scene = ref.get();
+            return scene == null || scene.getWindow() == null || !scene.getWindow().isShowing();
+        });
+        for (WeakReference<Scene> ref : new ArrayList<>(themedScenes)) {
+            Scene scene = ref.get();
+            if (scene != null) {
+                setSceneStylesheets(scene, theme);
+            }
+        }
     }
 
     private ThemeManager.ThemeOption resolveActiveTheme() {
@@ -1139,7 +2035,7 @@ public class UI {
         refreshThemesItem.setOnAction(event -> {
             themeManager.refreshThemes();
             refreshThemeMenu();
-            applyTheme(mainScene);
+            reapplyThemeToOpenWindows(resolveActiveTheme());
             showToast("Themes refreshed from " + themeManager.externalThemesDirectory());
         });
 
@@ -1156,7 +2052,7 @@ public class UI {
         settings.setTheme(themeId);
         ThemeManager.ThemeOption selected = resolveActiveTheme();
         settingsStore.save(settings);
-        applyTheme(mainScene, selected);
+        reapplyThemeToOpenWindows(selected);
     }
 
     private void openThemePreviewDialog() {
@@ -1186,6 +2082,7 @@ public class UI {
         TabPane previewTabs = new TabPane(
                 new Tab("Overview", buildPreviewOverview()),
                 new Tab("Table", buildPreviewTable()),
+                new Tab("Compare", buildPreviewCompare()),
                 new Tab("Sidebar", buildPreviewSidebar())
         );
         previewTabs.getStyleClass().addAll("main-tab-pane", "preview-tabs");
@@ -1230,7 +2127,7 @@ public class UI {
             }
             settings.setTheme(selected.id());
             settingsStore.save(settings);
-            applyTheme(mainScene, selected);
+            reapplyThemeToOpenWindows(selected);
             refreshThemeMenu();
             showToast("Applied theme: " + selected.displayName());
         });
@@ -1309,8 +2206,54 @@ public class UI {
         return pane;
     }
 
-    private TableColumn<PreviewRow, String> makePreviewColumn(String header, java.util.function.Function<PreviewRow, String> getter) {
-        TableColumn<PreviewRow, String> column = new TableColumn<>(header);
+    private VBox buildPreviewCompare() {
+        VBox pane = new VBox(8);
+        pane.getStyleClass().add("content-pane");
+        pane.setPadding(new Insets(12));
+
+        Label title = new Label("Compare Highlights");
+        title.getStyleClass().add("preview-title");
+        Label subtitle = new Label("Diff row colors: yellow = different, green = only A, red = only B.");
+        subtitle.getStyleClass().add("preview-subtitle");
+
+        TableView<Compare.Row> table = new TableView<>();
+        table.getStyleClass().add("modern-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+        table.getColumns().addAll(
+                makePreviewColumn("Property", Compare.Row::property),
+                makePreviewColumn("Value A", Compare.Row::valueA),
+                makePreviewColumn("Value B", Compare.Row::valueB),
+                makePreviewColumn("Status", row -> compareStatusLabel(row.status()))
+        );
+        table.setItems(FXCollections.observableArrayList(
+                new Compare.Row("ConnectionComponent @Id", "PSM-RDP", "PSM-RDP", Compare.Status.EQUAL),
+                new Compare.Row("TargetSettings @Port", "3389", "443", Compare.Status.DIFFERENT),
+                new Compare.Row("ComponentParameters / Parameter[AllowMapPrinters]", "Yes", "", Compare.Status.ONLY_A),
+                new Compare.Row("ComponentParameters / Parameter[EnableNLA]", "", "No", Compare.Status.ONLY_B)
+        ));
+        table.setRowFactory(tv -> new TableRow<>() {
+            @Override
+            protected void updateItem(Compare.Row row, boolean empty) {
+                super.updateItem(row, empty);
+                getStyleClass().removeAll("compare-diff", "compare-only-a", "compare-only-b");
+                if (!empty && row != null) {
+                    switch (row.status()) {
+                        case DIFFERENT -> getStyleClass().add("compare-diff");
+                        case ONLY_A -> getStyleClass().add("compare-only-a");
+                        case ONLY_B -> getStyleClass().add("compare-only-b");
+                        default -> { }
+                    }
+                }
+            }
+        });
+        VBox.setVgrow(table, Priority.ALWAYS);
+
+        pane.getChildren().addAll(title, subtitle, table);
+        return pane;
+    }
+
+    private <T> TableColumn<T, String> makePreviewColumn(String header, java.util.function.Function<T, String> getter) {
+        TableColumn<T, String> column = new TableColumn<>(header);
         column.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(getter.apply(data.getValue())));
         return column;
     }
@@ -1369,10 +2312,6 @@ public class UI {
         return col;
     }
 
-    /**
-     * Opens the single About window. If it already exists it is simply brought to the front, so
-     * at most one About window can be visible at a time.
-     */
     private void openAboutDialog() {
         if (aboutStage != null) {
             aboutStage.toFront();
@@ -1409,7 +2348,7 @@ public class UI {
         version.getStyleClass().add("about-version");
 
         Label description = new Label(
-                "Open-source administrator tool for managing CyberArk Self-Hosted PAM "
+                "Open-source administrator tool for managing " + PAM_PRODUCT + " Self-Hosted PAM "
                         + "configurations and policies. Browse connection components, policies, "
                         + "usages, altered addresses and PSM/PSMP servers from your PVConfiguration.xml "
                         + "and Policies.xml files.");
@@ -1417,7 +2356,9 @@ public class UI {
         description.getStyleClass().add("about-description");
 
         Label disclaimer = new Label(
-                "Not affiliated with, endorsed by, or supported by CyberArk Software Ltd.");
+                "CyberArk Self-Hosted PAM was rebranded as Idira by Palo Alto Networks (acquired "
+                        + "February 2026); this tool works with both. Not affiliated with, endorsed by, "
+                        + "or supported by CyberArk Software Ltd. or Palo Alto Networks.");
         disclaimer.setWrapText(true);
         disclaimer.getStyleClass().add("about-disclaimer");
 
@@ -1456,7 +2397,6 @@ public class UI {
         return container;
     }
 
-    /** Opens a URL in the user's default browser, falling back to a toast if unsupported. */
     private void openInBrowser(String url) {
         try {
             if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
@@ -1513,6 +2453,58 @@ public class UI {
         }
     }
 
+    private void openGeneralSettingsDialog() {
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("General Settings");
+
+        Label header = new Label("Global settings that apply to every source.");
+        header.setWrapText(true);
+
+        TextField defaultComponentField = new TextField();
+        defaultComponentField.setPromptText("e.g. PSM-RDP (leave blank to use the first available)");
+        defaultComponentField.setText(settings.getDefaultReplacementComponentId());
+        defaultComponentField.setMaxWidth(Double.MAX_VALUE);
+
+        Label defaultNote = new Label("Pre-selected in the replacement dialog when removing or unlinking "
+                + "would leave a policy with no connection component. Blank uses the first available "
+                + "component alphabetically.");
+        defaultNote.setWrapText(true);
+        defaultNote.getStyleClass().add("preview-note");
+
+        Button saveButton = new Button("Save & Close");
+        saveButton.setDefaultButton(true);
+        saveButton.setOnAction(event -> {
+            settings.setDefaultReplacementComponentId(defaultComponentField.getText());
+            settingsStore.save(settings);
+            showToast("General settings saved.");
+            dialog.close();
+        });
+
+        Button cancelButton = new Button("Cancel");
+        cancelButton.setCancelButton(true);
+        cancelButton.setOnAction(event -> dialog.close());
+
+        HBox buttons = new HBox(8, saveButton, cancelButton);
+        buttons.getStyleClass().add("dialog-actions");
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox content = new VBox(10,
+                header,
+                new Label("Default replacement connection component"),
+                defaultComponentField,
+                defaultNote,
+                buttons);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 460, 260);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.showAndWait();
+    }
+
     private void openSourcesSettingsDialog() {
         Stage dialog = new Stage();
         dialog.initOwner(primaryStage);
@@ -1528,6 +2520,7 @@ public class UI {
         TextField shortLabelField = new TextField();
         TextField folderPathField = new TextField();
         folderPathField.setPromptText("e.g. \\\\prodserver1\\c$\\programfiles\\cyberark\\pvwa\\temp\\ or .\\prod\\");
+
 
         Label activeLabel = new Label();
         activeLabel.getStyleClass().add("active-source-label");

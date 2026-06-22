@@ -17,23 +17,13 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Renders the application icon with Java2D, so the same vault design can be used for the live
- * JavaFX window icon ({@link #createIcons()}) and for exporting real PNG/ICO assets used by
- * native packaging (see {@code IconExporter}).
- *
- * <p>Using Java2D (instead of a JavaFX Canvas snapshot) avoids any dependency on the FX scene
- * graph or render timing, which makes the window/taskbar icon appear reliably.
- */
 public final class AppIcon {
 
-    /** Standard icon sizes; the OS picks the crispest variant per surface. */
     public static final int[] ICON_SIZES = {16, 24, 32, 48, 64, 128, 256};
 
     private AppIcon() {
     }
 
-    /** Builds the icon at every standard size for {@code stage.getIcons()}. */
     public static List<Image> createIcons() {
         List<Image> images = new ArrayList<>();
         for (int size : ICON_SIZES) {
@@ -42,7 +32,6 @@ public final class AppIcon {
         return images;
     }
 
-    /** Renders a single icon as PNG-encoded bytes. */
     public static byte[] renderPng(int size) {
         BufferedImage image = renderImage(size);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -54,7 +43,6 @@ public final class AppIcon {
         return out.toByteArray();
     }
 
-    /** Renders a single icon as an ARGB {@link BufferedImage} of the given pixel size. */
     public static BufferedImage renderImage(int size) {
         BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = image.createGraphics();
@@ -135,4 +123,3 @@ public final class AppIcon {
         return new Color(c.getRed(), c.getGreen(), c.getBlue(), (int) Math.round(alpha * 255));
     }
 }
-

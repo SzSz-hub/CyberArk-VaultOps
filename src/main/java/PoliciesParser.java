@@ -17,7 +17,7 @@ public class PoliciesParser extends Parser {
             String platformEnabled,
             String policyId,
             String policyName,
-            String componentAssigned,
+            Integer componentCount,
             String hasOverrides,
             String assignedComponents,
             XmlNode details) {
@@ -94,7 +94,7 @@ public class PoliciesParser extends Parser {
                     platformEnabled,
                     policyId,
                     policyId,
-                    componentIds.isEmpty() ? "No" : "Yes",
+                    componentIds.size(),
                     hasOverride ? "Yes" : "No",
                     String.join(", ", componentIds),
                     parseElementTree(policy)
@@ -547,4 +547,3 @@ public class PoliciesParser extends Parser {
         }
     }
 }
-
