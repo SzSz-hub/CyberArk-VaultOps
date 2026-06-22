@@ -1,0 +1,12 @@
+<ConnectionComponent DisplayName="New PSM Component" Id="PSM-NEW" Type="CyberArk.PasswordVault.TransparentConnection.PSM.PSMConnectionComponent, CyberArk.PasswordVault.TransparentConnection.PSM">
+  <ComponentParameters>
+    <Parameter Name="authentication level:i" Value="2" />
+  </ComponentParameters>
+  <UserParameters />
+  <TargetSettings ClientApp="newclient.exe" ClientDispatcher="PSMNewClient.exe" Protocol="RDP">
+    <Capabilities>
+      <Capability Id="WindowsEventsAudit" />
+    </Capabilities>
+  </TargetSettings>
+</ConnectionComponent>
+

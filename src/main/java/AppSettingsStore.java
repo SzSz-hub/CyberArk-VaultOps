@@ -42,7 +42,7 @@ public class AppSettingsStore {
         if (Files.exists(settingsPath)) {
             try (InputStream in = Files.newInputStream(settingsPath)) {
                 properties.load(in);
-            } catch (IOException e) {
+            } catch (IOException | IllegalArgumentException e) {
                 reportError("Failed to read settings from " + settingsPath + ": " + describe(e));
             }
         }

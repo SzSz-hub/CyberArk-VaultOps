@@ -1,0 +1,103 @@
+<PasswordVaultConfiguration>
+  <VersionInformation ProductVersion="140202" />
+  <ConnectionComponents>
+    <ConnectionComponent DisplayName="RDPWinApplet" EnableWindowScrollbar="No" FullScreen="No" Id="RDPWinApplet" Type="CyberArk.PasswordVault.TransparentConnection.Generic.GenericConnectionComponent, CyberArk.PasswordVault.TransparentConnection.Generic">
+      <ComponentParameters>
+        <Parameter Name="ConnectionScriptName" Value="RDPWinApplet.js" />
+        <Parameter Name="DisplayDebuggingMessage" Value="No" />
+      </ComponentParameters>
+      <UserParameters>
+        <Parameter Name="AllowMappingLocalDrives" Type="CyberArk.TransparentConnection.BooleanUserParameter, CyberArk.PasswordVault.TransparentConnection" Value="No" Visible="No" />
+        <Parameter Name="LogonDomain" Type="CyberArk.PasswordVault.TransparentConnection.RDP.LogonDomainUserParameter, CyberArk.PasswordVault.TransparentConnection.RDP" />
+      </UserParameters>
+    </ConnectionComponent>
+    <ConnectionComponent EnableToolbars="Yes" Id="WebConnection" Type="CyberArk.PasswordVault.TransparentConnection.Generic.GenericConnectionComponent, CyberArk.PasswordVault.TransparentConnection.Generic">
+      <ComponentParameters>
+        <Parameter Name="ConnectionScriptName" Value="GenericWebConnector.js" />
+      </ComponentParameters>
+    </ConnectionComponent>
+    <ConnectionComponent DisplayName="RDP" EnableWindowScrollbar="Yes" FullScreen="No" Height="800" Id="PSM-RDP" Type="CyberArk.PasswordVault.TransparentConnection.PSM.PSMConnectionComponent, CyberArk.PasswordVault.TransparentConnection.PSM" Width="1280">
+      <ComponentParameters>
+        <Parameter Name="authentication level:i" Value="2" />
+        <Parameter Name="alternate full address:s" Value="psm.example.com" />
+      </ComponentParameters>
+      <UserParameters>
+        <Parameter Name="AllowMappingLocalDrives" Required="No" Type="CyberArk.TransparentConnection.BooleanUserParameter, CyberArk.PasswordVault.TransparentConnection" Value="Yes" Visible="No" />
+        <Parameter Name="LogonDomain" Type="CyberArk.PasswordVault.TransparentConnection.RDP.LogonDomainUserParameter, CyberArk.PasswordVault.TransparentConnection.RDP" Value="EXAMPLE" />
+        <Parameter DisplayName="Port" Name="Port" Value="3389" />
+      </UserParameters>
+      <TargetSettings ClientApp="mstsc.exe" ClientDispatcher="PSMRdpClient.exe" Protocol="RDP">
+        <ClientSpecific />
+        <LockAppWindow Enable="No" />
+        <Capabilities>
+          <Capability Id="WindowsEventsAudit" />
+          <Capability Id="WindowsEventsTextRecorder" />
+        </Capabilities>
+      </TargetSettings>
+    </ConnectionComponent>
+    <ConnectionComponent DisplayName="SSH" EnableWindowScrollbar="Yes" FullScreen="No" Height="768" Id="PSM-SSH" Type="CyberArk.PasswordVault.TransparentConnection.PSM.PSMConnectionComponent, CyberArk.PasswordVault.TransparentConnection.PSM" Width="1024">
+      <ComponentParameters>
+        <Parameter Name="authentication level:i" Value="2" />
+      </ComponentParameters>
+      <UserParameters />
+      <TargetSettings ClientApp="putty.exe" ClientDispatcher="PSMSSHClient.exe" Protocol="SSH">
+        <ClientSpecific>
+          <Parameter Name="port" Value="22" />
+          <Multiline-Parameter Name="AutoLogonSequenceWithLogonAccount" Value="\[.*\@.* ~]\$ &gt;exec su - {Username}&#xA;Password:&gt;{Password}&#xA;" />
+          <Parameter Name="XServerCommandLine" Value="&quot;C:\Program Files (x86)\VcXsrv\vcxsrv.exe&quot; :{XDisplayNumber} -multiwindow" />
+        </ClientSpecific>
+        <Capabilities>
+          <Capability Id="SSHKeystrokesAudit" />
+          <Capability Id="SSHTextRecorder" />
+        </Capabilities>
+        <LockAppWindow Enable="No" />
+      </TargetSettings>
+    </ConnectionComponent>
+    <ConnectionComponent DisplayName="VMWare VSphere" EnableWindowScrollbar="Yes" FullScreen="No" Id="PSM-VSPHERE" Type="CyberArk.PasswordVault.TransparentConnection.PSM.PSMConnectionComponent, CyberArk.PasswordVault.TransparentConnection.PSM">
+      <ComponentParameters>
+        <Parameter Name="authentication level:i" Value="2" />
+      </ComponentParameters>
+      <UserParameters>
+        <Parameter Name="AllowMappingLocalDrives" Type="CyberArk.TransparentConnection.BooleanUserParameter, CyberArk.PasswordVault.TransparentConnection" Value="No" Visible="No" />
+      </UserParameters>
+      <TargetSettings ClientApp="&quot;C:\Program Files (x86)\VMware\VpxClient.exe&quot; -s &quot;{Address}&quot;" ClientDispatcher="Irrelevant" ClientInvokeType="CommandLine" Protocol="VMWare">
+        <ClientSpecific>
+          <Parameter Name="WaitBeforeCmdlineParmsHide" Value="2000" />
+        </ClientSpecific>
+        <LockAppWindow Enable="No" />
+        <Capabilities>
+          <Capability Id="KeystrokesAudit" />
+        </Capabilities>
+      </TargetSettings>
+    </ConnectionComponent>
+  </ConnectionComponents>
+  <ServerSettings>
+    <PSMServers>
+      <PSMServer ID="PSMServer" Name="PSM Server on PSM01" PSMProtocolVersion="3">
+        <ConnectionDetails>
+          <Server Address="psm01.example.com" AdminObject="PSMAdmin" Folder="Root" Object="PSMServer" Port="443" Safe="PSM" />
+          <TSGateway Address="10.0.0.10" Domain="10.0.0.10" Enable="No" Folder="Root" Object="PSMServer" Safe="PSM" />
+        </ConnectionDetails>
+      </PSMServer>
+      <PSMServer ID="PSM-PSM02" Name="PSM Server on PSM02" PSMProtocolVersion="3">
+        <ConnectionDetails>
+          <Server Address="10.0.0.11" AdminObject="PSMAdmin" Folder="Root" Object="PSMServer" Port="443" Safe="PSM" />
+          <TSGateway Address="10.0.0.11" Domain="10.0.0.11" Enable="No" Folder="Root" Object="PSM-PSM02" Safe="PSM" />
+        </ConnectionDetails>
+      </PSMServer>
+    </PSMServers>
+    <PSMPServers>
+      <PSMPServer ID="PSMPServer_psmp01" Name="PSMP Server on psmp01">
+        <ConnectionDetails>
+          <Server Address="10.0.0.20" Port="22" />
+        </ConnectionDetails>
+      </PSMPServer>
+      <PSMPServer ID="PSMPServer_psmp02" Name="PSMP Server on psmp02">
+        <ConnectionDetails>
+          <Server Address="10.0.0.21" Port="22" />
+        </ConnectionDetails>
+      </PSMPServer>
+    </PSMPServers>
+  </ServerSettings>
+</PasswordVaultConfiguration>
+
