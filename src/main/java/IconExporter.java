@@ -38,8 +38,6 @@ public final class IconExporter {
         writeIco(pngs, sizes, icoPath);
         System.out.println("Wrote " + icoPath.toAbsolutePath());
 
-        // Optional: prepare a clean, jar-only jpackage input dir and wipe the previous output so
-        // re-running the native-package build never fails with "directory already exists".
         if (args.length >= 4) {
             Path mainJar = Paths.get(args[1]);
             Path inputDir = Paths.get(args[2]);
@@ -105,4 +103,3 @@ public final class IconExporter {
         }
     }
 }
-

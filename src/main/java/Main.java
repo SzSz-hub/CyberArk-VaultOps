@@ -23,6 +23,12 @@ public class Main extends Application {
         ui.setOnConnectionComponentExport(controller::exportConnectionComponents);
         ui.setOnConnectionComponentRemove(controller::removeConnectionComponents);
         ui.setOnConnectionComponentUnlink(controller::unlinkConnectionComponents);
+        ui.setOnOrderComponents(controller::orderConnectionComponents);
+        ui.setOnImportPsmComponent(controller::importPsmComponents);
+        ui.setOnPvwaConnect(controller::connectToPvwa);
+        ui.setOnPvwaDisconnect(controller::disconnectFromPvwa);
+        ui.setOnImportFromFileOnline(controller::importPsmComponentsOnline);
+        ui.setOnConnectionComponentImportOnline(controller::importSelectedComponentsOnline);
         ui.setOnPoliciesTabSelected(controller::loadPoliciesIfNeeded);
         ui.setOnUsagesTabSelected(controller::loadUsageIfNeeded);
         ui.setOnTargetsTabSelected(controller::loadTargetsIfNeeded);
@@ -38,6 +44,8 @@ public class Main extends Application {
         ui.setOnRefreshCurrentRequested(controller::invalidateCurrentSelection);
         ui.setOnReloadAllRequested(controller::invalidateAllSourcesForActiveEnvironment);
         ui.setOnStatusRefreshRequested(controller::refreshStatusIndicators);
+        ui.setCompareItemLoader(controller::loadCompareItems);
+        ui.setCompareRunner(controller::runCompare);
         ui.setOnAppClose(controller::shutdown);
         ui.setupUI(stage);
         controller.loadAll();

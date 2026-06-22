@@ -59,6 +59,7 @@ public class AppSettings {
     private final List<SourceProfile> sourceProfiles = new ArrayList<>();
     private String activeProfileId;
     private String theme = DEFAULT_THEME;
+    private String defaultReplacementComponentId = "";
 
     public List<SourceProfile> getSourceProfiles() {
         List<SourceProfile> copy = new ArrayList<>();
@@ -106,6 +107,14 @@ public class AppSettings {
 
     public void setTheme(String theme) {
         this.theme = normalizeTheme(theme);
+    }
+
+    public String getDefaultReplacementComponentId() {
+        return defaultReplacementComponentId;
+    }
+
+    public void setDefaultReplacementComponentId(String defaultReplacementComponentId) {
+        this.defaultReplacementComponentId = safe(defaultReplacementComponentId).trim();
     }
 
     public void ensureValidActiveProfile() {

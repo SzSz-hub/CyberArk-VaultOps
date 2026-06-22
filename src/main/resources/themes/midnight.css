@@ -14,5 +14,12 @@
     -app-row-alt: #0d1e30;
     -app-toast-bg: rgba(3, 16, 28, 0.96);
     -app-toast-text: #ebf7ff;
-}
 
+    -app-compare-diff: #46401a;
+    -app-compare-only-a: #123f2c;
+    -app-compare-only-b: #46232f;
+    -app-compare-diff-selected: #645b25;
+    -app-compare-only-a-selected: #1d5b40;
+    -app-compare-only-b-selected: #633341;
+    -app-compare-text: #eaf6ff;
+}

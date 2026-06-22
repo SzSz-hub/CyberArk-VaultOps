@@ -21,6 +21,7 @@ import java.nio.file.attribute.FileTime;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -224,7 +225,6 @@ public class AppController {
                             FXCollections.observableArrayList(result.components());
                     wireFiltering(ui.getConnectionComponentTable(), masterData);
                     markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
-                    // M3: counts are derived from Policies.xml, so track its staleness too.
                     if (result.policiesRead()) {
                         markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
                     }
@@ -516,7 +516,6 @@ public class AppController {
         List<ComponentOperations.OrderScope> scopes = new ArrayList<>();
         Map<String, String> displayNames = new HashMap<>();
         try {
-            // Global scope: the connection component definitions in PVConfiguration.xml.
             List<String> definitionIds = new ArrayList<>();
             for (PVConfigurationParser.ConnectionComponentEntry comp : pvParser.GetConnectionComponents(pvConfigPath)) {
                 if (comp.id() != null && !comp.id().isBlank()) {
@@ -530,7 +529,6 @@ public class AppController {
                         definitionIds, false));
             }
 
-            // One scope per policy: the order its components are assigned in (Policies.xml).
             for (PoliciesParser.PolicyEntry policy : policiesParser.getPolicies(policiesPath)) {
                 String assigned = policy.assignedComponents();
                 if (assigned == null || assigned.isBlank()) {
@@ -1054,6 +1052,185 @@ public class AppController {
 
         detailWindows.put(key, popup);
         popup.show();
+    }
+
+    // ---------------------------------------------------------------------------------------- compare
+
+    public void loadCompareItems(String sourceId, Compare.Kind kind,
+                                 Consumer<List<Compare.Item>> onLoaded, Consumer<String> onError) {
+        AppSettings.SourceProfile profile = findProfile(sourceId);
+        if (profile == null || kind == null) {
+            if (onError != null) {
+                onError.accept("Pick a source first.");
+            }
+            return;
+        }
+        String pvPath;
+        String policiesPath;
+        try {
+            Path folder = folderFor(profile);
+            pvPath = folder.resolve(PV_CONFIGURATION_FILE).toString();
+            policiesPath = folder.resolve(POLICIES_FILE).toString();
+        } catch (Exception error) {
+            if (onError != null) {
+                onError.accept(messageOf(error));
+            }
+            return;
+        }
+        submitBackground(() -> {
+            try {
+                List<Compare.Item> items = buildCompareItems(kind, pvPath, policiesPath);
+                Platform.runLater(() -> onLoaded.accept(items));
+            } catch (Exception error) {
+                Platform.runLater(() -> {
+                    if (onError != null) {
+                        onError.accept(messageOf(error));
+                    }
+                });
+            }
+        });
+    }
+
+    private List<Compare.Item> buildCompareItems(Compare.Kind kind, String pvPath, String policiesPath) throws Exception {
+        Map<String, Compare.Item> byId = new LinkedHashMap<>();
+        switch (kind) {
+            case CONNECTION_COMPONENT -> {
+                for (PVConfigurationParser.ConnectionComponentEntry component : pvParser.GetConnectionComponents(pvPath)) {
+                    String label = component.name() == null || component.name().isBlank()
+                            ? component.id()
+                            : component.id() + "  (" + component.name() + ")";
+                    byId.putIfAbsent(component.id(), new Compare.Item(component.id(), label));
+                }
+            }
+            case USAGE -> {
+                for (PoliciesParser.usageEntry usage : policiesParser.getUsage(policiesPath)) {
+                    byId.putIfAbsent(usage.usageId(), new Compare.Item(usage.usageId(), usage.usageId()));
+                }
+            }
+            case POLICY -> {
+                for (PoliciesParser.PolicyEntry policy : policiesParser.getPolicies(policiesPath)) {
+                    byId.putIfAbsent(policy.policyId(), new Compare.Item(policy.policyId(), policy.policyId()));
+                }
+            }
+        }
+        List<Compare.Item> items = new ArrayList<>(byId.values());
+        items.sort(Comparator.comparing(item -> item.id() == null ? "" : item.id().toLowerCase()));
+        return items;
+    }
+
+    public void runCompare(Compare.Kind kind, String sourceAId, Compare.Item itemA, String sourceBId, Compare.Item itemB) {
+        AppSettings.SourceProfile profileA = findProfile(sourceAId);
+        AppSettings.SourceProfile profileB = findProfile(sourceBId);
+        if (kind == null || profileA == null || profileB == null || itemA == null || itemB == null) {
+            onLoadError.accept("Pick an item on both sides to compare.");
+            return;
+        }
+        String pvA;
+        String policiesA;
+        String pvB;
+        String policiesB;
+        try {
+            Path folderA = folderFor(profileA);
+            Path folderB = folderFor(profileB);
+            pvA = folderA.resolve(PV_CONFIGURATION_FILE).toString();
+            policiesA = folderA.resolve(POLICIES_FILE).toString();
+            pvB = folderB.resolve(PV_CONFIGURATION_FILE).toString();
+            policiesB = folderB.resolve(POLICIES_FILE).toString();
+        } catch (Exception error) {
+            onLoadError.accept(messageOf(error));
+            return;
+        }
+        runAsync("comparison",
+                () -> buildCompareResult(kind, profileA, profileB, itemA, itemB, pvA, policiesA, pvB, policiesB),
+                ui::showCompareResult,
+                null);
+    }
+
+    private Compare.Result buildCompareResult(Compare.Kind kind,
+                                              AppSettings.SourceProfile profileA, AppSettings.SourceProfile profileB,
+                                              Compare.Item itemA, Compare.Item itemB,
+                                              String pvA, String policiesA, String pvB, String policiesB) throws Exception {
+        PVConfigurationParser.XmlNode nodeA = loadCompareNode(kind, itemA.id(), pvA, policiesA);
+        PVConfigurationParser.XmlNode nodeB = loadCompareNode(kind, itemB.id(), pvB, policiesB);
+        if (nodeA == null || nodeB == null) {
+            throw new IllegalStateException("Could not find one of the selected items in its source.");
+        }
+        List<Compare.Row> rows = Compare.diff(Compare.flatten(nodeA), Compare.flatten(nodeB));
+        return new Compare.Result(
+                kind.label() + " comparison",
+                displaySource(profileA) + "  \u2022  " + itemA.id(),
+                displaySource(profileB) + "  \u2022  " + itemB.id(),
+                rows,
+                Compare.countDifferences(rows));
+    }
+
+    private PVConfigurationParser.XmlNode loadCompareNode(Compare.Kind kind, String id, String pvPath, String policiesPath) throws Exception {
+        switch (kind) {
+            case CONNECTION_COMPONENT -> {
+                for (PVConfigurationParser.ConnectionComponentEntry component : pvParser.GetConnectionComponents(pvPath)) {
+                    if (idEquals(component.id(), id)) {
+                        return component.details();
+                    }
+                }
+            }
+            case USAGE -> {
+                for (PoliciesParser.usageEntry usage : policiesParser.getUsage(policiesPath)) {
+                    if (idEquals(usage.usageId(), id)) {
+                        if (usage.children() != null && !usage.children().isEmpty()) {
+                            return usage.children().get(0);
+                        }
+                        return syntheticUsageNode(usage);
+                    }
+                }
+            }
+            case POLICY -> {
+                for (PoliciesParser.PolicyEntry policy : policiesParser.getPolicies(policiesPath)) {
+                    if (idEquals(policy.policyId(), id)) {
+                        return policy.details();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private PVConfigurationParser.XmlNode syntheticUsageNode(PoliciesParser.usageEntry usage) {
+        Map<String, String> attributes = new LinkedHashMap<>();
+        attributes.put("ID", usage.usageId());
+        if (usage.platformBaseId() != null && !usage.platformBaseId().isBlank()) {
+            attributes.put("PlatformBaseID", usage.platformBaseId());
+        }
+        if (usage.platformBaseProtocol() != null && !usage.platformBaseProtocol().isBlank()) {
+            attributes.put("PlatformBaseProtocol", usage.platformBaseProtocol());
+        }
+        if (usage.platformBaseType() != null && !usage.platformBaseType().isBlank()) {
+            attributes.put("PlatformBaseType", usage.platformBaseType());
+        }
+        return new Parser.XmlNode("Usage", attributes, List.of());
+    }
+
+    private AppSettings.SourceProfile findProfile(String sourceId) {
+        if (sourceId == null) {
+            return null;
+        }
+        for (AppSettings.SourceProfile profile : settings.getSourceProfiles()) {
+            if (sourceId.equals(profile.id())) {
+                return profile;
+            }
+        }
+        return null;
+    }
+
+    private Path folderFor(AppSettings.SourceProfile profile) {
+        String rawFolder = profile.folderPath();
+        if (rawFolder == null || rawFolder.isBlank()) {
+            throw new IllegalStateException("Source '" + displaySource(profile) + "' has no folder configured.");
+        }
+        return canonicalizeFolder(rawFolder.trim());
+    }
+
+    private static boolean idEquals(String a, String b) {
+        return a != null && b != null && a.trim().equalsIgnoreCase(b.trim());
     }
 
     private String activeSourceName() {
