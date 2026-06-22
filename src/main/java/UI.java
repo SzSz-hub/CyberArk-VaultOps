@@ -54,7 +54,7 @@ public class UI {
 
     // Application metadata used by the About window and the main stage title.
     private static final String APP_NAME = "CyberArk / Idira VaultOps";
-    private static final String APP_VERSION = "1.0";
+    private static final String APP_VERSION = loadAppVersion();
     private static final String GITHUB_URL = "https://github.com/SzSz-hub/CyberArk-VaultOps";
     // CyberArk Self-Hosted PAM was rebranded as Idira by Palo Alto Networks (acquired Feb 2026).
     // The tool works with both; this label is reused wherever we reference the managed product.
@@ -77,6 +77,22 @@ public class UI {
 
     private static final Runnable NO_OP = () -> {};
     private static final Duration STATUS_POLL_INTERVAL = Duration.seconds(20);
+
+    private static String loadAppVersion() {
+        try (java.io.InputStream in = UI.class.getResourceAsStream("/build-info.properties")) {
+            if (in != null) {
+                java.util.Properties props = new java.util.Properties();
+                props.load(in);
+                String version = props.getProperty("version", "");
+                if (version != null && !version.isBlank() && !version.contains("${")) {
+                    return version;
+                }
+            }
+        } catch (java.io.IOException ignored) {
+            // Fall back to the development version below.
+        }
+        return "dev";
+    }
     private Runnable onPsmTabSelected = NO_OP;
     private Runnable onSourceProfileChanged = NO_OP;
     private Runnable onPsmpTabSelected = NO_OP;
@@ -745,15 +761,16 @@ public class UI {
 
         CheckBox concurrentBox = new CheckBox("Allow concurrent session");
         concurrentBox.setSelected(true);
-        CheckBox ignoreCertBox = new CheckBox("Ignore certificate errors (self-signed PVWA)");
-        ignoreCertBox.setSelected(true);
+        CheckBox ignoreCertBox = new CheckBox("Ignore certificate errors (UNSAFE \u2014 self-signed PVWA only)");
+        ignoreCertBox.setSelected(false);
 
         final PvwaClient.Credentials[] result = {null};
 
         Button connectButton = new Button("Connect");
         connectButton.setDefaultButton(true);
         connectButton.setOnAction(event -> {
-            if (addressField.getText() == null || addressField.getText().isBlank()) {
+            String address = addressField.getText() == null ? "" : addressField.getText().trim();
+            if (address.isBlank()) {
                 showToast("PVWA address is required.");
                 return;
             }
@@ -761,8 +778,20 @@ public class UI {
                 showToast("Username is required.");
                 return;
             }
+            if (address.regionMatches(true, 0, "http://", 0, 7)
+                    && !confirm("Use plaintext HTTP?",
+                    "This PVWA address uses plaintext HTTP. Your credentials and session token "
+                            + "would be sent unencrypted. Continue only on a trusted network.")) {
+                return;
+            }
+            if (ignoreCertBox.isSelected()
+                    && !confirm("Disable TLS verification?",
+                    "Ignoring certificate errors exposes your CyberArk / Idira credentials to "
+                            + "man-in-the-middle attacks. Continue only against a known self-signed PVWA.")) {
+                return;
+            }
             result[0] = new PvwaClient.Credentials(
-                    addressField.getText().trim(),
+                    address,
                     authBox.getSelectionModel().getSelectedItem(),
                     userField.getText().trim(),
                     passwordField.getText() == null ? "" : passwordField.getText(),
@@ -1998,6 +2027,9 @@ public class UI {
     private void refreshAvailableThemes() {
         availableThemes.clear();
         availableThemes.addAll(themeManager.discoverThemes());
+        if (availableThemes.isEmpty()) {
+            showToast("No themes were found. Check the packaged resources and the external themes folder.");
+        }
     }
 
     private void refreshThemeMenu() {
@@ -2293,6 +2325,13 @@ public class UI {
         col.setCellValueFactory(data -> {
             Integer value = getter.apply(data.getValue());
             return new javafx.beans.property.SimpleObjectProperty<>(value);
+        });
+        col.setCellFactory(column -> new javafx.scene.control.TableCell<>() {
+            @Override
+            protected void updateItem(Integer value, boolean empty) {
+                super.updateItem(value, empty);
+                setText(empty ? null : (value == null ? "\u2014" : value.toString()));
+            }
         });
 
         Label label = new Label(header);

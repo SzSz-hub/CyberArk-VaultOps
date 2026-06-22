@@ -20,6 +20,7 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -43,6 +44,7 @@ public class ComponentOperations {
 
     private static final DateTimeFormatter FOLDER_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
     private static final DateTimeFormatter LOG_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final long MAX_IMPORT_ENTRY_BYTES = 16L * 1024 * 1024;
 
     public record ExportResult(String componentId, Path zipPath) {
     }
@@ -245,6 +247,8 @@ public class ComponentOperations {
             }
         }
 
+        assertNoDuplicateDefinitions(pvDoc);
+
         Path folder = createOutputFolder(outputRoot, sourceLabel);
         Path outputPv = folder.resolve("PVConfiguration.xml");
         writeDocument(pvDoc, outputPv);
@@ -254,6 +258,56 @@ public class ComponentOperations {
         writeOrderChangelog(changelog, sourceLabel, sourceFolder, pvReordered, policiesReordered);
 
         return new OrderResult(folder, outputPv, outputPolicies, changelog, pvReordered, policiesReordered);
+    }
+
+    // -------------------------------------------------------------------------------- Invariant checks
+
+    private void assertRemovalComplete(Document policiesDoc, Document pvDoc, Set<String> removeSet) {
+        for (Element policy : toElementList(policiesDoc.getElementsByTagName("Policy"))) {
+            Element ccParent = firstChildElement(policy, "ConnectionComponents");
+            if (ccParent == null) {
+                continue;
+            }
+            List<Element> refs = childElements(ccParent, "ConnectionComponent");
+            if (refs.isEmpty()) {
+                throw new IllegalStateException(
+                        "Policy '" + policy.getAttribute("ID").trim() + "' would be left without any connection component.");
+            }
+            for (Element ref : refs) {
+                if (removeSet.contains(ref.getAttribute("Id").trim())) {
+                    throw new IllegalStateException("Removed component is still referenced by policy '"
+                            + policy.getAttribute("ID").trim() + "': " + ref.getAttribute("Id").trim());
+                }
+            }
+        }
+        if (pvDoc != null) {
+            Element container = findConnectionComponentsContainer(pvDoc);
+            if (container != null) {
+                for (Element def : childElements(container, "ConnectionComponent")) {
+                    if (removeSet.contains(def.getAttribute("Id").trim())) {
+                        throw new IllegalStateException(
+                                "Removed component definition is still present: " + def.getAttribute("Id").trim());
+                    }
+                }
+            }
+        }
+    }
+
+    private void assertNoDuplicateDefinitions(Document pvDoc) {
+        Element container = findConnectionComponentsContainer(pvDoc);
+        if (container == null) {
+            return;
+        }
+        Set<String> seen = new HashSet<>();
+        for (Element def : childElements(container, "ConnectionComponent")) {
+            String id = def.getAttribute("Id").trim();
+            if (id.isBlank()) {
+                throw new IllegalStateException("PVConfiguration.xml contains a ConnectionComponent without an Id.");
+            }
+            if (!seen.add(id)) {
+                throw new IllegalStateException("Duplicate ConnectionComponent definition: " + id);
+            }
+        }
     }
 
     private List<Element> orderElementsByIdList(List<Element> elements, List<String> idOrder) {
@@ -348,6 +402,8 @@ public class ComponentOperations {
             return new ImportResult(false, null, null, null, List.of(), skipped);
         }
 
+        assertNoDuplicateDefinitions(pvDoc);
+
         Path folder = createOutputFolder(outputRoot, sourceLabel);
         Path outputPv = folder.resolve("PVConfiguration.xml");
         writeDocument(pvDoc, outputPv);
@@ -365,7 +421,10 @@ public class ComponentOperations {
                 if (entry.isDirectory() || !entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
                     continue;
                 }
-                try (InputStream in = zipFile.getInputStream(entry)) {
+                if (entry.getSize() > MAX_IMPORT_ENTRY_BYTES) {
+                    throw new IOException("XML entry exceeds the " + MAX_IMPORT_ENTRY_BYTES + "-byte import limit: " + entry.getName());
+                }
+                try (InputStream in = new BoundedInputStream(zipFile.getInputStream(entry), MAX_IMPORT_ENTRY_BYTES)) {
                     Document doc = loadDocumentFromStream(in);
                     Element root = doc.getDocumentElement();
                     if (root == null) {
@@ -453,6 +512,8 @@ public class ComponentOperations {
             return RemovalResult.cancelledResult();
         }
 
+        assertRemovalComplete(policiesDoc, null, removeSet);
+
         Path folder = createOutputFolder(outputRoot, sourceLabel);
         Path outputPolicies = folder.resolve("Policies.xml");
         writeDocument(policiesDoc, outputPolicies);
@@ -485,6 +546,8 @@ public class ComponentOperations {
 
         Document pvDoc = loadDocument(pvConfigurationPath);
         int removedDefinitions = removeComponentDefinitions(pvDoc, removeSet);
+
+        assertRemovalComplete(policiesDoc, pvDoc, removeSet);
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
 
@@ -548,11 +611,20 @@ public class ComponentOperations {
                     }
                 }
 
+                String replacementId = choice.componentId() == null ? "" : choice.componentId().trim();
+                if (replacementId.isBlank()) {
+                    return PolicyEditResult.cancelledResult();
+                }
+                if (removeSet.contains(replacementId)) {
+                    throw new IllegalArgumentException(
+                            "Replacement component '" + replacementId + "' is part of the removal set and cannot be reused.");
+                }
+
                 Element replacement = policiesDoc.createElement("ConnectionComponent");
-                replacement.setAttribute("Id", choice.componentId());
+                replacement.setAttribute("Id", replacementId);
                 replacement.setAttribute("Enable", choice.enabled() ? "Yes" : "No");
                 insertChildKeepingIndent(ccParent, replacement);
-                emptyPoliciesFixed.add(policyId + " -> " + choice.componentId()
+                emptyPoliciesFixed.add(policyId + " -> " + replacementId
                         + " (" + (choice.enabled() ? "enabled" : "disabled") + ")");
             }
         }
@@ -579,7 +651,11 @@ public class ComponentOperations {
 
     private Element findComponentDefinition(Document doc, String componentId) {
         for (Element component : toElementList(doc.getElementsByTagName("ConnectionComponent"))) {
-            if (componentId.equals(component.getAttribute("Id").trim())) {
+            Node parent = component.getParentNode();
+            boolean isDefinition = parent != null
+                    && parent.getNodeType() == Node.ELEMENT_NODE
+                    && "ConnectionComponents".equalsIgnoreCase(((Element) parent).getTagName());
+            if (isDefinition && componentId.equals(component.getAttribute("Id").trim())) {
                 return component;
             }
         }
@@ -589,10 +665,16 @@ public class ComponentOperations {
     // ---------------------------------------------------------------------------------------- Changelog
 
     private Path createOutputFolder(Path outputRoot, String sourceLabel) throws IOException {
-        String timestamp = LocalDateTime.now().format(FOLDER_TIMESTAMP);
-        Path folder = outputRoot.resolve(timestamp + "_" + sanitizeFileName(sourceLabel));
-        Files.createDirectories(folder);
-        return folder;
+        String base = LocalDateTime.now().format(FOLDER_TIMESTAMP) + "_" + sanitizeFileName(sourceLabel);
+        Files.createDirectories(outputRoot);
+        for (int suffix = 0; ; suffix++) {
+            Path folder = outputRoot.resolve(suffix == 0 ? base : base + "_" + suffix);
+            try {
+                return Files.createDirectory(folder);
+            } catch (java.nio.file.FileAlreadyExistsException existing) {
+                // Two operations within the same second collided; disambiguate with the next suffix.
+            }
+        }
     }
 
     private void writeChangelog(
@@ -791,19 +873,7 @@ public class ComponentOperations {
     }
 
     private DocumentBuilderFactory secureDocumentBuilderFactory() throws Exception {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        dbf.setNamespaceAware(false);
-        dbf.setIgnoringComments(false);
-        dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-        dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        dbf.setXIncludeAware(false);
-        dbf.setExpandEntityReferences(false);
-        dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-        return dbf;
+        return Parser.newSecureDocumentBuilderFactory(false);
     }
 
     private String serializeElement(Element element) throws Exception {
@@ -817,8 +887,21 @@ public class ComponentOperations {
     private void writeDocument(Document doc, Path path) throws Exception {
         Transformer transformer = newSecureTransformer();
         transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
-        try (OutputStream out = Files.newOutputStream(path)) {
-            transformer.transform(new DOMSource(doc), new StreamResult(out));
+        Path parent = path.getParent();
+        Path tempFile = parent == null
+                ? Files.createTempFile("vaultops", ".xml.tmp")
+                : Files.createTempFile(parent, "vaultops", ".xml.tmp");
+        try {
+            try (OutputStream out = Files.newOutputStream(tempFile)) {
+                transformer.transform(new DOMSource(doc), new StreamResult(out));
+            }
+            try {
+                Files.move(tempFile, path, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(tempFile, path, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(tempFile);
         }
     }
 
@@ -844,5 +927,46 @@ public class ComponentOperations {
             return "unnamed";
         }
         return name.trim().replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    private static final class BoundedInputStream extends InputStream {
+        private final InputStream delegate;
+        private final long limit;
+        private long read;
+
+        private BoundedInputStream(InputStream delegate, long limit) {
+            this.delegate = delegate;
+            this.limit = limit;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int value = delegate.read();
+            if (value != -1) {
+                advance(1);
+            }
+            return value;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            int count = delegate.read(buffer, offset, length);
+            if (count > 0) {
+                advance(count);
+            }
+            return count;
+        }
+
+        private void advance(long count) throws IOException {
+            read += count;
+            if (read > limit) {
+                throw new IOException("Decompressed XML exceeds the " + limit + "-byte import limit.");
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
     }
 }
