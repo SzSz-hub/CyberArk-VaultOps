@@ -20,11 +20,31 @@ public class AppSettingsStore {
     private Consumer<String> errorHandler = System.err::println;
 
     public AppSettingsStore() {
-        this(Paths.get(SETTINGS_FILE));
+        this(defaultSettingsPath());
     }
 
     public AppSettingsStore(Path settingsPath) {
         this.settingsPath = settingsPath;
+    }
+
+    public static Path userDataDirectory() {
+        String appData = System.getenv("APPDATA");
+        Path base;
+        if (appData != null && !appData.isBlank()) {
+            base = Paths.get(appData, "CyberArkVaultOps");
+        } else {
+            String home = System.getProperty("user.home", ".");
+            base = Paths.get(home, ".cyberark-vaultops");
+        }
+        return base.toAbsolutePath().normalize();
+    }
+
+    private static Path defaultSettingsPath() {
+        Path legacy = Paths.get(SETTINGS_FILE).toAbsolutePath().normalize();
+        if (Files.exists(legacy)) {
+            return legacy;
+        }
+        return userDataDirectory().resolve(SETTINGS_FILE);
     }
 
     public void setErrorHandler(Consumer<String> errorHandler) {

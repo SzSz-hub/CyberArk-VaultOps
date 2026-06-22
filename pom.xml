@@ -18,6 +18,9 @@
         <!-- jpackage output type. "app-image" works on every OS without extra installer tooling; override
              from the command line (e.g. -Djpackage.type=msi / dmg / deb) to build a native installer. -->
         <jpackage.type>app-image</jpackage.type>
+        <!-- jpackage icon. Windows uses the multi-resolution .ico; the per-OS profiles below switch this
+             to a PNG that the Linux/macOS jpackage backends accept. -->
+        <jpackage.icon>${project.build.directory}/app-icon.ico</jpackage.icon>
     </properties>
 
     <profiles>
@@ -37,6 +40,7 @@
             </activation>
             <properties>
                 <javafx.platform>linux</javafx.platform>
+                <jpackage.icon>${project.build.directory}/app-icon-256.png</jpackage.icon>
             </properties>
         </profile>
         <profile>
@@ -46,6 +50,7 @@
             </activation>
             <properties>
                 <javafx.platform>mac</javafx.platform>
+                <jpackage.icon>${project.build.directory}/app-icon-256.png</jpackage.icon>
             </properties>
         </profile>
         <profile>
@@ -55,6 +60,7 @@
             </activation>
             <properties>
                 <javafx.platform>mac-aarch64</javafx.platform>
+                <jpackage.icon>${project.build.directory}/app-icon-256.png</jpackage.icon>
             </properties>
         </profile>
 
@@ -139,7 +145,7 @@
                                         <argument>--main-class</argument>
                                         <argument>Launcher</argument>
                                         <argument>--icon</argument>
-                                        <argument>${project.build.directory}/app-icon.ico</argument>
+                                        <argument>${jpackage.icon}</argument>
                                         <argument>--dest</argument>
                                         <argument>${project.build.directory}/dist</argument>
                                     </arguments>
@@ -168,6 +174,22 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>build-info.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>build-info.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -21,8 +21,8 @@ public final class ThemeManager {
 
     private final Path externalThemesDirectory;
 
-    private List<ThemeOption> cachedThemes;
-    private boolean exampleTemplateEnsured;
+    private volatile List<ThemeOption> cachedThemes;
+    private volatile boolean exampleTemplateEnsured;
 
     public ThemeManager(Path externalThemesDirectory) {
         this.externalThemesDirectory = externalThemesDirectory == null

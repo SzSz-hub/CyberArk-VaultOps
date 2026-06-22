@@ -15,6 +15,8 @@ import java.security.cert.X509Certificate;
 
 public class PvwaClient {
 
+    private static volatile SSLSocketFactory trustAllSocketFactory;
+
     public record Credentials(
             String baseUri,
             String authType,
@@ -104,31 +106,34 @@ public class PvwaClient {
     private HttpResponse post(String urlString, byte[] body, String authToken, boolean ignoreCertificateErrors) throws Exception {
         URL url = new URL(urlString);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        if (ignoreCertificateErrors && connection instanceof HttpsURLConnection https) {
-            https.setSSLSocketFactory(trustAllSocketFactory());
-            https.setHostnameVerifier((hostname, sslSession) -> true);
-        }
-
-        connection.setRequestMethod("POST");
-        connection.setConnectTimeout(30_000);
-        connection.setReadTimeout(120_000);
-        connection.setRequestProperty("Content-Type", "application/json");
-        connection.setRequestProperty("Accept", "application/json");
-        if (authToken != null && !authToken.isBlank()) {
-            connection.setRequestProperty("Authorization", authToken);
-        }
-        connection.setDoOutput(true);
-
-        try (OutputStream out = connection.getOutputStream()) {
-            if (body.length > 0) {
-                out.write(body);
+        try {
+            if (ignoreCertificateErrors && connection instanceof HttpsURLConnection https) {
+                https.setSSLSocketFactory(trustAllSocketFactory());
+                https.setHostnameVerifier((hostname, sslSession) -> true);
             }
-        }
 
-        int status = connection.getResponseCode();
-        String responseBody = readBody(status < 400 ? connection.getInputStream() : connection.getErrorStream());
-        connection.disconnect();
-        return new HttpResponse(status, responseBody);
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(30_000);
+            connection.setReadTimeout(120_000);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Accept", "application/json");
+            if (authToken != null && !authToken.isBlank()) {
+                connection.setRequestProperty("Authorization", authToken);
+            }
+            connection.setDoOutput(true);
+
+            try (OutputStream out = connection.getOutputStream()) {
+                if (body.length > 0) {
+                    out.write(body);
+                }
+            }
+
+            int status = connection.getResponseCode();
+            String responseBody = readBody(status < 400 ? connection.getInputStream() : connection.getErrorStream());
+            return new HttpResponse(status, responseBody);
+        } finally {
+            connection.disconnect();
+        }
     }
 
     private static String readBody(InputStream stream) throws IOException {
@@ -147,27 +152,36 @@ public class PvwaClient {
     }
 
     private static SSLSocketFactory trustAllSocketFactory() throws Exception {
-        TrustManager[] trustAll = {
-                new X509TrustManager() {
-                    @Override
-                    public X509Certificate[] getAcceptedIssuers() {
-                        return new X509Certificate[0];
-                    }
+        SSLSocketFactory cached = trustAllSocketFactory;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (PvwaClient.class) {
+            if (trustAllSocketFactory == null) {
+                TrustManager[] trustAll = {
+                        new X509TrustManager() {
+                            @Override
+                            public X509Certificate[] getAcceptedIssuers() {
+                                return new X509Certificate[0];
+                            }
 
-                    @Override
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
-                        // Trust-all is an explicit, user-selected option for self-signed PVWA certificates.
-                    }
+                            @Override
+                            public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                                // Trust-all is an explicit, user-selected option for self-signed PVWA certificates.
+                            }
 
-                    @Override
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
-                        // Trust-all is an explicit, user-selected option for self-signed PVWA certificates.
-                    }
-                }
-        };
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(null, trustAll, new SecureRandom());
-        return context.getSocketFactory();
+                            @Override
+                            public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                                // Trust-all is an explicit, user-selected option for self-signed PVWA certificates.
+                            }
+                        }
+                };
+                SSLContext context = SSLContext.getInstance("TLS");
+                context.init(null, trustAll, new SecureRandom());
+                trustAllSocketFactory = context.getSocketFactory();
+            }
+        }
+        return trustAllSocketFactory;
     }
 
     // -------------------------------------------------------------------------------------- JSON helpers
@@ -205,10 +219,12 @@ public class PvwaClient {
         int markerIndex = body.indexOf(marker);
         if (markerIndex >= 0) {
             int colon = body.indexOf(':', markerIndex + marker.length());
-            int firstQuote = body.indexOf('"', colon + 1);
-            int secondQuote = body.indexOf('"', firstQuote + 1);
-            if (firstQuote >= 0 && secondQuote > firstQuote) {
-                return body.substring(firstQuote + 1, secondQuote);
+            if (colon >= 0) {
+                int firstQuote = body.indexOf('"', colon + 1);
+                int secondQuote = firstQuote < 0 ? -1 : body.indexOf('"', firstQuote + 1);
+                if (firstQuote >= 0 && secondQuote > firstQuote) {
+                    return body.substring(firstQuote + 1, secondQuote);
+                }
             }
         }
         return body.length() > 300 ? body.substring(0, 300) : body;

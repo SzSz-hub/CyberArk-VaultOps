@@ -61,7 +61,7 @@ public class AppSettings {
     private String theme = DEFAULT_THEME;
     private String defaultReplacementComponentId = "";
 
-    public List<SourceProfile> getSourceProfiles() {
+    public synchronized List<SourceProfile> getSourceProfiles() {
         List<SourceProfile> copy = new ArrayList<>();
         for (SourceProfile profile : sourceProfiles) {
             copy.add(new SourceProfile(profile));
@@ -69,7 +69,7 @@ public class AppSettings {
         return copy;
     }
 
-    public void replaceSourceProfiles(List<SourceProfile> profiles) {
+    public synchronized void replaceSourceProfiles(List<SourceProfile> profiles) {
         sourceProfiles.clear();
         for (SourceProfile profile : profiles) {
             if (sourceProfiles.size() >= MAX_SOURCES) {
@@ -80,16 +80,16 @@ public class AppSettings {
         ensureValidActiveProfile();
     }
 
-    public String getActiveProfileId() {
+    public synchronized String getActiveProfileId() {
         return activeProfileId;
     }
 
-    public void setActiveProfileId(String activeProfileId) {
+    public synchronized void setActiveProfileId(String activeProfileId) {
         this.activeProfileId = activeProfileId;
         ensureValidActiveProfile();
     }
 
-    public SourceProfile getActiveProfile() {
+    public synchronized SourceProfile getActiveProfile() {
         if (activeProfileId == null || activeProfileId.isBlank()) {
             return null;
         }
@@ -117,7 +117,7 @@ public class AppSettings {
         this.defaultReplacementComponentId = safe(defaultReplacementComponentId).trim();
     }
 
-    public void ensureValidActiveProfile() {
+    public synchronized void ensureValidActiveProfile() {
         if (sourceProfiles.isEmpty()) {
             activeProfileId = null;
             return;

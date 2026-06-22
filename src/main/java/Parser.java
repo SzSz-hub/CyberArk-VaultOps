@@ -19,9 +19,13 @@ public class Parser {
     }
 
     protected static DocumentBuilderFactory newSecureDocumentBuilderFactory() throws ParserConfigurationException {
+        return newSecureDocumentBuilderFactory(true);
+    }
+
+    static DocumentBuilderFactory newSecureDocumentBuilderFactory(boolean ignoreComments) throws ParserConfigurationException {
         DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
         dbf.setNamespaceAware(false);
-        dbf.setIgnoringComments(true);
+        dbf.setIgnoringComments(ignoreComments);
 
         // Primary defense: forbid DOCTYPE entirely. Any document containing a DTD fails fast.
         dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
@@ -50,10 +54,14 @@ public class Parser {
     }
 
     static Element firstChildElement(Element parent, String childTagName) {
-        NodeList children = parent.getElementsByTagName(childTagName);
-        if (children.getLength() == 0) return null;
-        Node child = children.item(0);
-        return child.getNodeType() == Node.ELEMENT_NODE ? (Element) child : null;
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child.getNodeType() == Node.ELEMENT_NODE && childTagName.equals(((Element) child).getTagName())) {
+                return (Element) child;
+            }
+        }
+        return null;
     }
 
     static PVConfigurationParser.XmlNode parseElementTree(Element element) {

@@ -223,22 +223,31 @@ git push origin v1.0.0
 ### PVConfiguration.xml
 
 ```xml
-<PVConfiguration>
+<PasswordVaultConfiguration>
   <ConnectionComponents>
-    <ConnectionComponent Id="comp-id" Name="Component Name">
+    <ConnectionComponent Id="comp-id" DisplayName="Component Name" Type="...">
+      <TargetSettings ClientApp="client.exe" ClientDispatcher="PSMClient.exe" />
       <UserParameters>
         <Parameter Name="PSMRemoteMachine" Value="target-address" />
       </UserParameters>
     </ConnectionComponent>
   </ConnectionComponents>
   <PSMServers>
-    <PSMServer ID="id" Name="Name" Address="address" Port="1234" 
-               TSGatewayAddress="gateway" TSGatewayEnable="yes" />
+    <PSMServer ID="id" Name="Name" PSMProtocolVersion="1.0">
+      <ConnectionDetails>
+        <Server Address="address" Port="1234" Safe="PSM" Folder="root" Object="obj" />
+        <TSGateway Address="gateway" Enable="yes" />
+      </ConnectionDetails>
+    </PSMServer>
   </PSMServers>
   <PSMPServers>
-    <PSMPServer ID="id" Name="Name" Address="address" Port="8080" />
+    <PSMPServer ID="id" Name="Name">
+      <ConnectionDetails>
+        <Server Address="address" Port="8080" />
+      </ConnectionDetails>
+    </PSMPServer>
   </PSMPServers>
-</PVConfiguration>
+</PasswordVaultConfiguration>
 ```
 
 ### Policies.xml

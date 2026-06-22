@@ -23,13 +23,17 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public class AppController {
 
@@ -47,6 +51,10 @@ public class AppController {
     private PvwaClient.Session pvwaSession;
     private String lastPvwaBaseUri = "https://<pvwa_address>/PasswordVault";
     private final Map<String, EnvironmentLoadState> environmentLoadStates = new HashMap<>();
+    private final OperationAudit audit = new OperationAudit(AppSettingsStore.userDataDirectory().resolve("operations.log"));
+
+    private volatile long loadGeneration;
+    private final java.util.concurrent.atomic.AtomicBoolean statusRefreshInFlight = new java.util.concurrent.atomic.AtomicBoolean();
 
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "VaultOps-loader");
@@ -113,6 +121,7 @@ public class AppController {
     }
 
     public void onSourceProfileChanged() {
+        loadGeneration++;
         connectionComponentLoaded = false;
         psmpLoaded = false;
         psmLoaded = false;
@@ -179,13 +188,20 @@ public class AppController {
         LocalDateTime policiesLoadedAt = envState.policies.loadedAt;
         FileTime policiesModifiedAtLoad = envState.policies.sourceModifiedAtLoad;
 
+        if (!statusRefreshInFlight.compareAndSet(false, true)) {
+            return;
+        }
         submitBackground(() -> {
-            boolean pvStale = isStale(pvLoadedAt, pvModifiedAtLoad, readLastModified(pvPath));
-            boolean policiesStale = isStale(policiesLoadedAt, policiesModifiedAtLoad, readLastModified(policiesPath));
-            String pvLabel = formatLoadStatusLabel(PV_CONFIGURATION_FILE, pvLoadedAt, pvStale);
-            String policiesLabel = formatLoadStatusLabel(POLICIES_FILE, policiesLoadedAt, policiesStale);
-            Platform.runLater(() ->
-                    ui.setLoadStatus(sourceName, pvLabel, pvStale, policiesLabel, policiesStale));
+            try {
+                boolean pvStale = isStale(pvLoadedAt, pvModifiedAtLoad, readLastModified(pvPath));
+                boolean policiesStale = isStale(policiesLoadedAt, policiesModifiedAtLoad, readLastModified(policiesPath));
+                String pvLabel = formatLoadStatusLabel(PV_CONFIGURATION_FILE, pvLoadedAt, pvStale);
+                String policiesLabel = formatLoadStatusLabel(POLICIES_FILE, policiesLoadedAt, policiesStale);
+                Platform.runLater(() ->
+                        ui.setLoadStatus(sourceName, pvLabel, pvStale, policiesLabel, policiesStale));
+            } finally {
+                statusRefreshInFlight.set(false);
+            }
         });
     }
 
@@ -195,7 +211,7 @@ public class AppController {
         }
 
         showDetailWindow(
-                "CC|" + activeSourceName() + "|" + entry.id(),
+                "CC|" + activeSourceId() + "|" + entry.id(),
                 "Connection Component Details",
                 "Connection Component: " + entry.id(),
                 formatConnectionComponentDetails(entry.details()));
@@ -218,15 +234,23 @@ public class AppController {
 
         connectionComponentLoaded = true;
 
+        final long generation = loadGeneration;
+        final String profileId = settings.getActiveProfileId();
         runAsync("connection components",
                 () -> buildConnectionComponents(pvConfigPath, policiesPath),
                 result -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     ObservableList<PVConfigurationParser.ConnectionComponentEntry> masterData =
                             FXCollections.observableArrayList(result.components());
                     wireFiltering(ui.getConnectionComponentTable(), masterData);
-                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    markFileLoaded(profileId, PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
                     if (result.policiesRead()) {
-                        markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                        markFileLoaded(profileId, POLICIES_FILE, Paths.get(policiesPath));
+                    } else {
+                        onLoadError.accept("Assignment counts unavailable: Policies.xml could not be read. "
+                                + "Counts shown as \u2014. Do not remove components based on this view.");
                     }
                     refreshStatusIndicators();
                 },
@@ -259,7 +283,7 @@ public class AppController {
 
         List<PVConfigurationParser.ConnectionComponentEntry> componentsWithCounts = new ArrayList<>();
         for (PVConfigurationParser.ConnectionComponentEntry comp : components) {
-            int count = assignmentCounts.getOrDefault(comp.id(), 0);
+            Integer count = policiesRead ? assignmentCounts.getOrDefault(comp.id(), 0) : null;
             componentsWithCounts.add(new PVConfigurationParser.ConnectionComponentEntry(
                     comp.id(), comp.name(), comp.ClientApp(), comp.ClientDispatcher(), count, comp.details()
             ));
@@ -286,11 +310,16 @@ public class AppController {
         }
         psmpLoaded = true;
 
+        final long generation = loadGeneration;
+        final String profileId = settings.getActiveProfileId();
         runAsync("PSMP servers",
                 () -> pvParser.getPSMPServers(pvConfigPath),
                 data -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     wireFiltering(ui.getPsmpTable(), FXCollections.observableArrayList(data));
-                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    markFileLoaded(profileId, PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
                     refreshStatusIndicators();
                 },
                 () -> psmpLoaded = false);
@@ -310,11 +339,16 @@ public class AppController {
         }
         psmLoaded = true;
 
+        final long generation = loadGeneration;
+        final String profileId = settings.getActiveProfileId();
         runAsync("PSM servers",
                 () -> pvParser.getPSMServers(pvConfigPath),
                 data -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     wireFiltering(ui.getPsmTable(), FXCollections.observableArrayList(data));
-                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    markFileLoaded(profileId, PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
                     refreshStatusIndicators();
                 },
                 () -> psmLoaded = false);
@@ -334,11 +368,16 @@ public class AppController {
         }
         usagesLoaded = true;
 
+        final long generation = loadGeneration;
+        final String profileId = settings.getActiveProfileId();
         runAsync("Usage",
                 () -> policiesParser.getUsage(policiesPath),
                 data -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     wireFiltering(ui.getUsageTable(), FXCollections.observableArrayList(data));
-                    markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    markFileLoaded(profileId, POLICIES_FILE, Paths.get(policiesPath));
                     refreshStatusIndicators();
                 },
                 () -> usagesLoaded = false);
@@ -358,11 +397,16 @@ public class AppController {
         }
         policiesLoaded = true;
 
+        final long generation = loadGeneration;
+        final String profileId = settings.getActiveProfileId();
         runAsync("Policies",
                 () -> policiesParser.getPolicies(policiesPath),
                 data -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     wireFiltering(ui.getPoliciesTable(), FXCollections.observableArrayList(data));
-                    markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    markFileLoaded(profileId, POLICIES_FILE, Paths.get(policiesPath));
                     refreshStatusIndicators();
                 },
                 () -> policiesLoaded = false);
@@ -382,11 +426,16 @@ public class AppController {
         }
         targetsLoaded = true;
 
+        final long generation = loadGeneration;
+        final String profileId = settings.getActiveProfileId();
         runAsync("altered addresses",
                 () -> policiesParser.getAggregatedTargetsByAlteredAddress(pvConfigPath),
                 data -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     wireFiltering(ui.getAlteredAddressTable(), FXCollections.observableArrayList(data));
-                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    markFileLoaded(profileId, PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
                     refreshStatusIndicators();
                 },
                 () -> targetsLoaded = false);
@@ -411,7 +460,7 @@ public class AppController {
                 () -> policiesParser.getTargetDetailsForAddress(pvConfigPath, address),
                 details -> {
                     ui.setTargetDetails(details);
-                    markFileLoaded(PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
+                    markFileLoaded(settings.getActiveProfileId(), PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
                     refreshStatusIndicators();
                 },
                 () -> ui.setTargetDetails(List.of()));
@@ -436,7 +485,7 @@ public class AppController {
                 () -> policiesParser.getAssignmentsForConnectionComponent(policiesPath, entry.id()),
                 rows -> {
                     ui.setConnectionAssignments(rows);
-                    markFileLoaded(POLICIES_FILE, Paths.get(policiesPath));
+                    markFileLoaded(settings.getActiveProfileId(), POLICIES_FILE, Paths.get(policiesPath));
                     refreshStatusIndicators();
                 },
                 () -> ui.setConnectionAssignments(List.of()));
@@ -577,14 +626,26 @@ public class AppController {
         String sourceLabel = activeSourceName();
         String sourceFolder = activeSourceFolder();
 
-        try {
-            ComponentOperations.OrderResult result2 = componentOperations.applyComponentOrder(
-                    pvConfigPath, policiesPath, pvDefinitionOrder, policyOrders, outputRoot, sourceLabel, sourceFolder);
-            onLoadError.accept("Ordered " + result2.pvReordered() + " definition(s) and "
-                    + result2.policiesReordered() + " policy block(s). Output written to " + result2.outputFolder());
-        } catch (Exception e) {
-            reportLoadError("order components", e);
+        if (!requireFreshFiles("order components", pvConfigPath, policiesPath)) {
+            return;
         }
+
+        final List<String> pvOrder = pvDefinitionOrder;
+        final Map<String, List<String>> policyOrderMap = policyOrders;
+        onLoadError.accept("Ordering connection components ...");
+        runAsync("order components",
+                () -> componentOperations.applyComponentOrder(
+                        pvConfigPath, policiesPath, pvOrder, policyOrderMap, outputRoot, sourceLabel, sourceFolder),
+                result2 -> {
+                    audit.record("offline.order", Map.of(
+                            "source", sourceLabel,
+                            "definitionsReordered", String.valueOf(result2.pvReordered()),
+                            "policiesReordered", String.valueOf(result2.policiesReordered()),
+                            "output", String.valueOf(result2.outputFolder())));
+                    onLoadError.accept("Ordered " + result2.pvReordered() + " definition(s) and "
+                            + result2.policiesReordered() + " policy block(s). Output written to " + result2.outputFolder());
+                },
+                null);
     }
 
     public void importPsmComponents() {
@@ -615,28 +676,38 @@ public class AppController {
         String sourceLabel = activeSourceName();
         String sourceFolder = activeSourceFolder();
 
-        try {
-            ComponentOperations.ImportResult result = componentOperations.importConnectionComponents(
-                    pvConfigPath, zips, outputRoot, sourceLabel, sourceFolder);
-
-            if (!result.imported()) {
-                String message = "No connection components imported.";
-                if (!result.skipped().isEmpty()) {
-                    message += " Skipped: " + String.join("; ", result.skipped());
-                }
-                onLoadError.accept(message);
-                return;
-            }
-
-            String summary = "Imported " + result.importedIds().size() + " connection component(s): "
-                    + String.join(", ", result.importedIds()) + ". Output written to " + result.outputFolder();
-            if (!result.skipped().isEmpty()) {
-                summary += " (skipped " + result.skipped().size() + ")";
-            }
-            onLoadError.accept(summary);
-        } catch (Exception e) {
-            reportLoadError("import PSM component", e);
+        if (!requireFreshFiles("import PSM component", pvConfigPath)) {
+            return;
         }
+
+        onLoadError.accept("Importing " + zips.size() + " package(s) into PVConfiguration.xml ...");
+        runAsync("import PSM component",
+                () -> componentOperations.importConnectionComponents(
+                        pvConfigPath, zips, outputRoot, sourceLabel, sourceFolder),
+                result -> {
+                    if (!result.imported()) {
+                        String message = "No connection components imported.";
+                        if (!result.skipped().isEmpty()) {
+                            message += " Skipped: " + String.join("; ", result.skipped());
+                        }
+                        onLoadError.accept(message);
+                        return;
+                    }
+
+                    audit.record("offline.import", Map.of(
+                            "source", sourceLabel,
+                            "imported", String.join(",", result.importedIds()),
+                            "skipped", String.valueOf(result.skipped().size()),
+                            "output", String.valueOf(result.outputFolder())));
+
+                    String summary = "Imported " + result.importedIds().size() + " connection component(s): "
+                            + String.join(", ", result.importedIds()) + ". Output written to " + result.outputFolder();
+                    if (!result.skipped().isEmpty()) {
+                        summary += " (skipped " + result.skipped().size() + ")";
+                    }
+                    onLoadError.accept(summary);
+                },
+                null);
     }
 
     // ------------------------------------------------------------------------------ Online (PVWA REST)
@@ -654,6 +725,10 @@ public class AppController {
                 session -> {
                     pvwaSession = session;
                     ui.setPvwaStatus("PVWA: connected (" + session.baseUri() + ")", true);
+                    audit.record("pvwa.logon", Map.of(
+                            "baseUri", session.baseUri(),
+                            "user", credentials.username() == null ? "" : credentials.username(),
+                            "tlsVerification", session.ignoreCertificateErrors() ? "disabled" : "enabled"));
                     onLoadError.accept("Connected to PVWA as " + credentials.username() + ".");
                 },
                 () -> {
@@ -668,15 +743,19 @@ public class AppController {
             onLoadError.accept("Not connected to PVWA.");
             return;
         }
-        pvwaSession = null;
-        ui.setPvwaStatus("PVWA: not connected", false);
         runAsync("PVWA logoff",
                 () -> {
                     pvwaClient.logoff(session);
                     return Boolean.TRUE;
                 },
-                ignored -> onLoadError.accept("Disconnected from PVWA."),
-                null);
+                ignored -> {
+                    pvwaSession = null;
+                    ui.setPvwaStatus("PVWA: not connected", false);
+                    audit.record("pvwa.logoff", Map.of("baseUri", session.baseUri()));
+                    onLoadError.accept("Disconnected from PVWA.");
+                },
+                () -> onLoadError.accept("Logoff failed; still connected to " + session.baseUri()
+                        + ". Try Disconnect again."));
     }
 
     public void importPsmComponentsOnline() {
@@ -717,7 +796,13 @@ public class AppController {
                     }
                     return summary;
                 },
-                this::reportOnlineImport,
+                summary -> {
+                    audit.record("pvwa.import.file", Map.of(
+                            "baseUri", session.baseUri(),
+                            "succeeded", String.join(",", summary.succeeded),
+                            "failed", String.join(",", summary.failed)));
+                    reportOnlineImport(summary);
+                },
                 null);
     }
 
@@ -767,7 +852,13 @@ public class AppController {
                     }
                     return summary;
                 },
-                this::reportOnlineImport,
+                summary -> {
+                    audit.record("pvwa.import.selected", Map.of(
+                            "baseUri", session.baseUri(),
+                            "succeeded", String.join(",", summary.succeeded),
+                            "failed", String.join(",", summary.failed)));
+                    reportOnlineImport(summary);
+                },
                 null);
     }
 
@@ -848,39 +939,48 @@ public class AppController {
             return;
         }
 
-        List<String> dropdownIds;
-        try {
-            dropdownIds = loadConnectionComponentIds(pvConfigPath);
-        } catch (Exception e) {
-            dropdownIds = new ArrayList<>();
+        if (!requireFreshFiles(alsoRemoveDefinitions ? "remove components" : "unlink components",
+                policiesPath, alsoRemoveDefinitions ? pvConfigPath : null)) {
+            return;
         }
-        final List<String> resolverIds = dropdownIds;
 
         Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
         String sourceLabel = activeSourceName();
         String sourceFolder = activeSourceFolder();
 
-        try {
-            ComponentOperations.RemovalResult result = alsoRemoveDefinitions
-                    ? componentOperations.removeConnectionComponents(policiesPath, pvConfigPath, ids, outputRoot,
-                            sourceLabel, sourceFolder, policyId -> ui.showEmptyPolicyDialog(policyId, resolverIds))
-                    : componentOperations.unlinkConnectionComponents(policiesPath, ids, outputRoot,
-                            sourceLabel, sourceFolder, policyId -> ui.showEmptyPolicyDialog(policyId, resolverIds));
+        onLoadError.accept((alsoRemoveDefinitions ? "Removing " : "Unlinking ") + ids.size() + " component(s) ...");
+        runAsync("connection component change",
+                () -> {
+                    List<String> resolverIds = replacementCandidates(pvConfigPath, alsoRemoveDefinitions ? ids : List.of());
+                    Function<String, ComponentOperations.EmptyPolicyChoice> resolver =
+                            policyId -> resolveEmptyPolicyOnFxThread(policyId, resolverIds);
+                    return alsoRemoveDefinitions
+                            ? componentOperations.removeConnectionComponents(policiesPath, pvConfigPath, ids, outputRoot,
+                                    sourceLabel, sourceFolder, resolver)
+                            : componentOperations.unlinkConnectionComponents(policiesPath, ids, outputRoot,
+                                    sourceLabel, sourceFolder, resolver);
+                },
+                result -> {
+                    if (result.cancelled()) {
+                        onLoadError.accept("Operation cancelled. No files were written.");
+                        return;
+                    }
 
-            if (result.cancelled()) {
-                onLoadError.accept("Operation cancelled. No files were written.");
-                return;
-            }
+                    audit.record(alsoRemoveDefinitions ? "offline.remove" : "offline.unlink", Map.of(
+                            "source", sourceLabel,
+                            "components", String.join(",", ids),
+                            "assignmentsRemoved", String.valueOf(result.totalRemovedAssignments()),
+                            "definitionsRemoved", String.valueOf(result.removedDefinitions()),
+                            "output", String.valueOf(result.outputPolicies() == null ? "" : result.outputPolicies().getParent())));
 
-            String summary = "Removed " + result.totalRemovedAssignments() + " policy assignment(s)";
-            if (alsoRemoveDefinitions) {
-                summary += " and " + result.removedDefinitions() + " definition(s)";
-            }
-            summary += ". Output written to " + result.outputPolicies().getParent();
-            onLoadError.accept(summary);
-        } catch (Exception e) {
-            reportLoadError("connection component change", e);
-        }
+                    String summary = "Removed " + result.totalRemovedAssignments() + " policy assignment(s)";
+                    if (alsoRemoveDefinitions) {
+                        summary += " and " + result.removedDefinitions() + " definition(s)";
+                    }
+                    summary += ". Output written to " + result.outputPolicies().getParent();
+                    onLoadError.accept(summary);
+                },
+                null);
     }
 
     private List<String> collectComponentIds(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
@@ -891,6 +991,78 @@ public class AppController {
             }
         }
         return ids;
+    }
+
+    private boolean requireFreshFiles(String operation, String... paths) {
+        AppSettings.SourceProfile profile = settings.getActiveProfile();
+        if (profile == null) {
+            return true;
+        }
+        EnvironmentLoadState state = getOrCreateEnvironmentState(profile.id());
+        for (String path : paths) {
+            if (path == null) {
+                continue;
+            }
+            Path filePath = Paths.get(path);
+            String fileName = filePath.getFileName() == null ? "" : filePath.getFileName().toString();
+            FileLoadState loaded = PV_CONFIGURATION_FILE.equals(fileName) ? state.pvConfiguration
+                    : POLICIES_FILE.equals(fileName) ? state.policies : null;
+            if (loaded == null || loaded.sourceModifiedAtLoad == null) {
+                continue;
+            }
+            FileTime current = readLastModified(filePath);
+            if (current != null && current.compareTo(loaded.sourceModifiedAtLoad) > 0) {
+                onLoadError.accept(fileName + " changed on disk since it was loaded. Use Update Current to reload "
+                        + "before running " + operation + ".");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private ComponentOperations.EmptyPolicyChoice resolveEmptyPolicyOnFxThread(String policyId, List<String> resolverIds) {
+        if (Platform.isFxApplicationThread()) {
+            return ui.showEmptyPolicyDialog(policyId, resolverIds);
+        }
+        java.util.concurrent.CompletableFuture<ComponentOperations.EmptyPolicyChoice> future =
+                new java.util.concurrent.CompletableFuture<>();
+        Platform.runLater(() -> {
+            try {
+                future.complete(ui.showEmptyPolicyDialog(policyId, resolverIds));
+            } catch (Throwable error) {
+                future.completeExceptionally(error);
+            }
+        });
+        try {
+            return future.get();
+        } catch (Exception error) {
+            return ComponentOperations.EmptyPolicyChoice.cancel();
+        }
+    }
+
+    private List<String> replacementCandidates(String pvConfigPath, List<String> excludedIds) {
+        List<String> ids;
+        try {
+            ids = loadConnectionComponentIds(pvConfigPath);
+        } catch (Exception error) {
+            ids = new ArrayList<>();
+        }
+        if (excludedIds == null || excludedIds.isEmpty()) {
+            return ids;
+        }
+        Set<String> exclude = new HashSet<>();
+        for (String id : excludedIds) {
+            if (id != null) {
+                exclude.add(id.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        List<String> filtered = new ArrayList<>();
+        for (String id : ids) {
+            if (!exclude.contains(id.trim().toLowerCase(Locale.ROOT))) {
+                filtered.add(id);
+            }
+        }
+        return filtered;
     }
 
     private List<String> loadConnectionComponentIds(String pvConfigPath) throws Exception {
@@ -959,7 +1131,7 @@ public class AppController {
         }
 
         showDetailWindow(
-                "POLICY|" + activeSourceName() + "|" + policy.policyId(),
+                "POLICY|" + activeSourceId() + "|" + policy.policyId(),
                 "Policy Details",
                 "Policy: " + policy.policyId(),
                 formatConnectionComponentDetails(policy.details()));
@@ -971,7 +1143,7 @@ public class AppController {
         }
 
         showDetailWindow(
-                "USAGE|" + activeSourceName() + "|" + usage.usageId(),
+                "USAGE|" + activeSourceId() + "|" + usage.usageId(),
                 "Usage Details",
                 "Usage: " + usage.usageId(),
                 formatConnectionComponentDetails(usage.children().get(0)));
@@ -1242,6 +1414,11 @@ public class AppController {
         return name == null || name.isBlank() ? "Unnamed source" : name;
     }
 
+    private String activeSourceId() {
+        AppSettings.SourceProfile profile = settings.getActiveProfile();
+        return profile == null || profile.id() == null ? "" : profile.id();
+    }
+
     private void reportLoadError(String target, Exception error) {
         AppSettings.SourceProfile profile = settings.getActiveProfile();
         String profileName = profile == null || profile.displayName() == null || profile.displayName().isBlank()
@@ -1291,6 +1468,7 @@ public class AppController {
     }
 
     private void invalidatePvDataForActiveEnvironment() {
+        loadGeneration++;
         connectionComponentLoaded = false;
         psmpLoaded = false;
         psmLoaded = false;
@@ -1312,6 +1490,7 @@ public class AppController {
     }
 
     private void invalidatePoliciesDataForActiveEnvironment() {
+        loadGeneration++;
         usagesLoaded = false;
         policiesLoaded = false;
         targetsLoaded = false;
@@ -1335,19 +1514,22 @@ public class AppController {
         }
     }
 
-    private void markFileLoaded(String fileName, Path filePath) {
-        AppSettings.SourceProfile profile = settings.getActiveProfile();
-        if (profile == null) {
+    private void markFileLoaded(String profileId, String fileName, Path filePath) {
+        if (profileId == null || profileId.isBlank()) {
             return;
         }
 
-        EnvironmentLoadState state = getOrCreateEnvironmentState(profile.id());
+        EnvironmentLoadState state = getOrCreateEnvironmentState(profileId);
         FileLoadState fileLoadState = PV_CONFIGURATION_FILE.equals(fileName)
                 ? state.pvConfiguration
                 : state.policies;
 
         fileLoadState.loadedAt = LocalDateTime.now();
         fileLoadState.sourceModifiedAtLoad = readLastModified(filePath);
+    }
+
+    private boolean isCurrentGeneration(long generation) {
+        return generation == loadGeneration;
     }
 
     private EnvironmentLoadState getOrCreateEnvironmentState(String profileId) {
