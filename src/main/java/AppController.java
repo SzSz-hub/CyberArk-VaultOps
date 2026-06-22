@@ -23,6 +23,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -41,6 +42,9 @@ public class AppController {
     private final PVConfigurationParser pvParser = new PVConfigurationParser();
     private final PoliciesParser policiesParser = new PoliciesParser();
     private final ComponentOperations componentOperations = new ComponentOperations();
+    private final PvwaClient pvwaClient = new PvwaClient();
+    private PvwaClient.Session pvwaSession;
+    private String lastPvwaBaseUri = "https://<pvwa_address>/PasswordVault";
     private final Map<String, EnvironmentLoadState> environmentLoadStates = new HashMap<>();
 
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -91,7 +95,6 @@ public class AppController {
         });
     }
 
-    /** Submits to the background worker, tolerating shutdown races during application close. */
     private void submitBackground(Runnable task) {
         try {
             backgroundExecutor.submit(task);
@@ -494,6 +497,314 @@ public class AppController {
                 null);
     }
 
+    // ------------------------------------------------------------------------------ Order / Import
+
+    private static final String SCOPE_PVCONFIG = "PVCONFIG";
+    private static final String SCOPE_POLICY_PREFIX = "POLICY:";
+
+    public void orderConnectionComponents() {
+        String policiesPath;
+        String pvConfigPath;
+        try {
+            policiesPath = getActivePoliciesPath();
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("order components", e);
+            return;
+        }
+
+        List<ComponentOperations.OrderScope> scopes = new ArrayList<>();
+        Map<String, String> displayNames = new HashMap<>();
+        try {
+            // Global scope: the connection component definitions in PVConfiguration.xml.
+            List<String> definitionIds = new ArrayList<>();
+            for (PVConfigurationParser.ConnectionComponentEntry comp : pvParser.GetConnectionComponents(pvConfigPath)) {
+                if (comp.id() != null && !comp.id().isBlank()) {
+                    definitionIds.add(comp.id());
+                    displayNames.put(comp.id(), comp.name() == null ? "" : comp.name());
+                }
+            }
+            if (definitionIds.size() > 1) {
+                scopes.add(new ComponentOperations.OrderScope(SCOPE_PVCONFIG,
+                        "PVConfiguration.xml \u2014 connection component definitions (sorted by Id)",
+                        definitionIds, false));
+            }
+
+            // One scope per policy: the order its components are assigned in (Policies.xml).
+            for (PoliciesParser.PolicyEntry policy : policiesParser.getPolicies(policiesPath)) {
+                String assigned = policy.assignedComponents();
+                if (assigned == null || assigned.isBlank()) {
+                    continue;
+                }
+                List<String> ids = new ArrayList<>();
+                for (String part : assigned.split(",")) {
+                    String id = part.trim();
+                    if (!id.isBlank()) {
+                        ids.add(id);
+                    }
+                }
+                if (ids.size() > 1) {
+                    String platform = policy.platformId() == null || policy.platformId().isBlank()
+                            ? "" : " (" + policy.platformId() + ")";
+                    scopes.add(new ComponentOperations.OrderScope(SCOPE_POLICY_PREFIX + policy.policyId(),
+                            "Policy: " + policy.policyId() + platform + " (sorted by DisplayName)", ids, true));
+                }
+            }
+        } catch (Exception e) {
+            reportLoadError("order components", e);
+            return;
+        }
+
+        if (scopes.isEmpty()) {
+            onLoadError.accept("Nothing to order: no multi-component definitions or policies were found.");
+            return;
+        }
+
+        List<ComponentOperations.OrderScope> result = ui.showOrderComponentsDialog(scopes, displayNames);
+        if (result == null) {
+            return; // User cancelled.
+        }
+
+        List<String> pvDefinitionOrder = null;
+        Map<String, List<String>> policyOrders = new LinkedHashMap<>();
+        for (ComponentOperations.OrderScope scope : result) {
+            if (SCOPE_PVCONFIG.equals(scope.key())) {
+                pvDefinitionOrder = scope.componentIds();
+            } else if (scope.key() != null && scope.key().startsWith(SCOPE_POLICY_PREFIX)) {
+                policyOrders.put(scope.key().substring(SCOPE_POLICY_PREFIX.length()), scope.componentIds());
+            }
+        }
+
+        Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
+        String sourceLabel = activeSourceName();
+        String sourceFolder = activeSourceFolder();
+
+        try {
+            ComponentOperations.OrderResult result2 = componentOperations.applyComponentOrder(
+                    pvConfigPath, policiesPath, pvDefinitionOrder, policyOrders, outputRoot, sourceLabel, sourceFolder);
+            onLoadError.accept("Ordered " + result2.pvReordered() + " definition(s) and "
+                    + result2.policiesReordered() + " policy block(s). Output written to " + result2.outputFolder());
+        } catch (Exception e) {
+            reportLoadError("order components", e);
+        }
+    }
+
+    public void importPsmComponents() {
+        String pvConfigPath;
+        try {
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("import PSM component", e);
+            return;
+        }
+
+        List<File> chosen = ui.chooseImportFiles();
+        if (chosen == null || chosen.isEmpty()) {
+            return; // User cancelled.
+        }
+
+        List<Path> zips = new ArrayList<>();
+        for (File file : chosen) {
+            if (file != null) {
+                zips.add(file.toPath());
+            }
+        }
+        if (zips.isEmpty()) {
+            return;
+        }
+
+        Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
+        String sourceLabel = activeSourceName();
+        String sourceFolder = activeSourceFolder();
+
+        try {
+            ComponentOperations.ImportResult result = componentOperations.importConnectionComponents(
+                    pvConfigPath, zips, outputRoot, sourceLabel, sourceFolder);
+
+            if (!result.imported()) {
+                String message = "No connection components imported.";
+                if (!result.skipped().isEmpty()) {
+                    message += " Skipped: " + String.join("; ", result.skipped());
+                }
+                onLoadError.accept(message);
+                return;
+            }
+
+            String summary = "Imported " + result.importedIds().size() + " connection component(s): "
+                    + String.join(", ", result.importedIds()) + ". Output written to " + result.outputFolder();
+            if (!result.skipped().isEmpty()) {
+                summary += " (skipped " + result.skipped().size() + ")";
+            }
+            onLoadError.accept(summary);
+        } catch (Exception e) {
+            reportLoadError("import PSM component", e);
+        }
+    }
+
+    // ------------------------------------------------------------------------------ Online (PVWA REST)
+
+    public void connectToPvwa() {
+        PvwaClient.Credentials credentials = ui.showPvwaLogonDialog(lastPvwaBaseUri);
+        if (credentials == null) {
+            return; // User cancelled.
+        }
+        lastPvwaBaseUri = credentials.baseUri();
+        onLoadError.accept("Connecting to " + credentials.baseUri() + " ...");
+
+        runAsync("PVWA logon",
+                () -> pvwaClient.logon(credentials),
+                session -> {
+                    pvwaSession = session;
+                    ui.setPvwaStatus("PVWA: connected (" + session.baseUri() + ")", true);
+                    onLoadError.accept("Connected to PVWA as " + credentials.username() + ".");
+                },
+                () -> {
+                    pvwaSession = null;
+                    ui.setPvwaStatus("PVWA: not connected", false);
+                });
+    }
+
+    public void disconnectFromPvwa() {
+        PvwaClient.Session session = pvwaSession;
+        if (session == null) {
+            onLoadError.accept("Not connected to PVWA.");
+            return;
+        }
+        pvwaSession = null;
+        ui.setPvwaStatus("PVWA: not connected", false);
+        runAsync("PVWA logoff",
+                () -> {
+                    pvwaClient.logoff(session);
+                    return Boolean.TRUE;
+                },
+                ignored -> onLoadError.accept("Disconnected from PVWA."),
+                null);
+    }
+
+    public void importPsmComponentsOnline() {
+        if (!requirePvwaSession()) {
+            return;
+        }
+
+        List<File> chosen = ui.chooseImportFiles();
+        if (chosen == null || chosen.isEmpty()) {
+            return; // User cancelled.
+        }
+
+        List<Path> zips = new ArrayList<>();
+        for (File file : chosen) {
+            if (file != null) {
+                zips.add(file.toPath());
+            }
+        }
+        if (zips.isEmpty()) {
+            return;
+        }
+
+        PvwaClient.Session session = pvwaSession;
+        onLoadError.accept("Importing " + zips.size() + " package(s) to PVWA ...");
+
+        runAsync("online import",
+                () -> {
+                    OnlineImportSummary summary = new OnlineImportSummary();
+                    for (Path zip : zips) {
+                        String label = zip.getFileName() == null ? zip.toString() : zip.getFileName().toString();
+                        try {
+                            byte[] bytes = Files.readAllBytes(zip);
+                            pvwaClient.importConnectionComponent(session, bytes);
+                            summary.succeeded.add(label);
+                        } catch (Exception e) {
+                            summary.failed.add(label + " (" + messageOf(e) + ")");
+                        }
+                    }
+                    return summary;
+                },
+                this::reportOnlineImport,
+                null);
+    }
+
+    public void importSelectedComponentsOnline(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            onLoadError.accept("Select at least one connection component first.");
+            return;
+        }
+        if (!requirePvwaSession()) {
+            return;
+        }
+
+        String pvConfigPath;
+        try {
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("online import", e);
+            return;
+        }
+
+        List<String> ids = collectComponentIds(entries);
+        if (ids.isEmpty()) {
+            onLoadError.accept("Select at least one connection component first.");
+            return;
+        }
+
+        PvwaClient.Session session = pvwaSession;
+        if (!ui.confirm("Import to PVWA",
+                "Import " + ids.size() + " connection component(s) to " + session.baseUri() + "?\n\n"
+                        + String.join(", ", ids))) {
+            return;
+        }
+
+        onLoadError.accept("Importing " + ids.size() + " component(s) to PVWA ...");
+
+        runAsync("online import",
+                () -> {
+                    OnlineImportSummary summary = new OnlineImportSummary();
+                    for (String id : ids) {
+                        try {
+                            byte[] bytes = componentOperations.packageConnectionComponent(pvConfigPath, id);
+                            pvwaClient.importConnectionComponent(session, bytes);
+                            summary.succeeded.add(id);
+                        } catch (Exception e) {
+                            summary.failed.add(id + " (" + messageOf(e) + ")");
+                        }
+                    }
+                    return summary;
+                },
+                this::reportOnlineImport,
+                null);
+    }
+
+    private boolean requirePvwaSession() {
+        if (pvwaSession == null) {
+            onLoadError.accept("Connect to PVWA first (PVWA menu \u2192 Connect to PVWA).");
+            return false;
+        }
+        return true;
+    }
+
+    private void reportOnlineImport(OnlineImportSummary summary) {
+        if (summary.failed.isEmpty()) {
+            onLoadError.accept("Imported " + summary.succeeded.size() + " connection component(s) to PVWA: "
+                    + String.join(", ", summary.succeeded));
+        } else if (summary.succeeded.isEmpty()) {
+            onLoadError.accept("PVWA import failed: " + String.join("; ", summary.failed));
+        } else {
+            onLoadError.accept("Imported " + summary.succeeded.size() + " to PVWA ("
+                    + String.join(", ", summary.succeeded) + "); failed " + summary.failed.size() + ": "
+                    + String.join("; ", summary.failed));
+        }
+    }
+
+    private static String messageOf(Exception e) {
+        return (e == null || e.getMessage() == null || e.getMessage().isBlank())
+                ? (e == null ? "unknown error" : e.getClass().getSimpleName())
+                : e.getMessage();
+    }
+
+    private static final class OnlineImportSummary {
+        private final List<String> succeeded = new ArrayList<>();
+        private final List<String> failed = new ArrayList<>();
+    }
+
     // ------------------------------------------------------------------------------ Remove / Unlink
 
     public void removeConnectionComponents(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
@@ -745,7 +1056,6 @@ public class AppController {
         popup.show();
     }
 
-    /** Returns the active source profile's display name, or a sensible fallback when unavailable. */
     private String activeSourceName() {
         AppSettings.SourceProfile profile = settings.getActiveProfile();
         if (profile == null) {
