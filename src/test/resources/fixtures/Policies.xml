@@ -1,0 +1,78 @@
+<PasswordVaultPolicies>
+  <VersionInformation ProductVersion="140202" />
+  <Devices>
+    <Device Name="Application">
+      <Properties>
+        <Required>
+        </Required>
+        <Optional />
+      </Properties>
+      <Policies>
+        <Policy AutoChangeOnAdd="No" Enabled="Yes" ID="SinglePolicy" PlatformBaseID="WindowsServerLocal" PlatformBaseProtocol="Windows" PlatformBaseType="Windows">
+          <Properties>
+            <Required>
+              <Property Name="Address" />
+              <Property Name="Username" />
+            </Required>
+            <Optional />
+          </Properties>
+          <PrivilegedSessionManagement Enable="No" MaxSessionDuration="720" SessionRecorderSafe="PSMRecordings_NPA_T1" />
+          <ConnectionComponents>
+            <ConnectionComponent Id="PSM-RDP" />
+          </ConnectionComponents>
+          <Usages>
+            <Usage Name="IISAppPool" />
+          </Usages>
+        </Policy>
+        <Policy AutoChangeOnAdd="No" ID="MultiPolicy" PlatformBaseProtocol="Windows" PlatformBaseType="Windows">
+          <Properties>
+            <Required>
+              <Property Name="Address" />
+              <Property Name="Username" />
+            </Required>
+            <Optional />
+          </Properties>
+          <PrivilegedSessionManagement Enable="No" MaxSessionDuration="720" SessionRecorderSafe="PSMRecordings_NPA_T1" />
+          <ConnectionComponents>
+            <ConnectionComponent Id="PSM-SSH" Enable="No" />
+            <ConnectionComponent Enable="Yes" Id="PSM-RDP" />
+            <ConnectionComponent Id="WebConnection" Enable="Yes">
+              <OverrideUserParameters>
+                <Parameter Name="LogonDomain" Value="EXAMPLE" />
+              </OverrideUserParameters>
+            </ConnectionComponent>
+          </ConnectionComponents>
+        </Policy>
+        <Policy AutoChangeOnAdd="No" ID="LonePolicy" PlatformBaseID="UnixSSH" PlatformBaseProtocol="SSH" PlatformBaseType="UNIX">
+          <Properties>
+            <Required>
+              <Property Name="Address" />
+              <Property Name="Username" />
+            </Required>
+            <Optional />
+          </Properties>
+          <PrivilegedSessionManagement Enable="No" MaxSessionDuration="720" SessionRecorderSafe="PSMRecordings_NPA_T1" />
+          <ConnectionComponents>
+            <ConnectionComponent Enable="Yes" Id="PSM-SSH" />
+          </ConnectionComponents>
+        </Policy>
+      </Policies>
+    </Device>
+  </Devices>
+  <Usages>
+    <Usage ID="IISAppPool" PlatformBaseID="IISAppPool" PlatformBaseProtocol="WMI" PlatformBaseType="IISAppPool">
+      <Properties>
+        <Required>
+          <Property Name="Address" />
+        </Required>
+        <Optional>
+          <Property Name="Port" />
+        </Optional>
+      </Properties>
+      <DisplayedColumns>
+        <Column Name="Address" />
+      </DisplayedColumns>
+    </Usage>
+  </Usages>
+</PasswordVaultPolicies>
+

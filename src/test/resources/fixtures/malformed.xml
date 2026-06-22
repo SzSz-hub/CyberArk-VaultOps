@@ -1,0 +1,8 @@
+<PasswordVaultConfiguration>
+  <ConnectionComponents>
+    <ConnectionComponent Id="PSM-RDP" DisplayName="RDP">
+      <ComponentParameters>
+        <Parameter Name="authentication level:i" Value="2" />
+  </ConnectionComponents>
+</PasswordVaultConfiguration>
+

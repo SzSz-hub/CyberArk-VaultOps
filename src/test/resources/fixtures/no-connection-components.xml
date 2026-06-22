@@ -1,0 +1,7 @@
+<PasswordVaultConfiguration>
+  <VersionInformation ProductVersion="140202" />
+  <ServerSettings>
+    <PSMServers />
+  </ServerSettings>
+</PasswordVaultConfiguration>
+
