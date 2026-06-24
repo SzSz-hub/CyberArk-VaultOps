@@ -4,9 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.example</groupId>
-    <artifactId>CyberArkAdminTool</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <groupId>io.github.szsz-hub</groupId>
+    <artifactId>cyberark-vaultops</artifactId>
+    <version>1.0</version>
+
+    <name>CyberArk / Idira VaultOps</name>
+    <description>Open-source administrator tool for managing CyberArk / Idira (Palo Alto Networks)
+        Self-Hosted PAM configurations and policies.</description>
+    <url>https://github.com/SzSz-hub/CyberArk-VaultOps</url>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -18,12 +23,15 @@
         <!-- jpackage output type. "app-image" works on every OS without extra installer tooling; override
              from the command line (e.g. -Djpackage.type=msi / dmg / deb) to build a native installer. -->
         <jpackage.type>app-image</jpackage.type>
-        <!-- jpackage icon. Windows uses the multi-resolution .ico; the per-OS profiles below switch this
-             to a PNG that the Linux/macOS jpackage backends accept. -->
+        <!-- jpackage icon. The default is the multi-resolution Windows .ico; the icon-* profiles below
+             switch it to a PNG on Linux/macOS. The icon follows the HOST OS (jpackage only builds for the
+             machine it runs on), so it is deliberately decoupled from the toggleable platform-* profiles. -->
         <jpackage.icon>${project.build.directory}/app-icon.ico</jpackage.icon>
     </properties>
 
     <profiles>
+        <!-- platform-* select only the JavaFX native classifier; they may be force-activated to
+             cross-bundle the fat jar for another OS and intentionally do NOT touch the jpackage icon. -->
         <profile>
             <id>platform-windows</id>
             <activation>
@@ -40,7 +48,6 @@
             </activation>
             <properties>
                 <javafx.platform>linux</javafx.platform>
-                <jpackage.icon>${project.build.directory}/app-icon-256.png</jpackage.icon>
             </properties>
         </profile>
         <profile>
@@ -50,7 +57,6 @@
             </activation>
             <properties>
                 <javafx.platform>mac</javafx.platform>
-                <jpackage.icon>${project.build.directory}/app-icon-256.png</jpackage.icon>
             </properties>
         </profile>
         <profile>
@@ -60,7 +66,28 @@
             </activation>
             <properties>
                 <javafx.platform>mac-aarch64</javafx.platform>
+            </properties>
+        </profile>
+
+        <!-- icon-* are auto-activated by the host OS only (never meant to be toggled): jpackage on
+             Windows requires .ico, while the Linux/macOS backends take a PNG. Keeping these separate from
+             platform-* means a force-activated platform profile can never feed a PNG to Windows jpackage. -->
+        <profile>
+            <id>icon-linux</id>
+            <activation>
+                <os><family>unix</family><name>Linux</name></os>
+            </activation>
+            <properties>
                 <jpackage.icon>${project.build.directory}/app-icon-256.png</jpackage.icon>
+            </properties>
+        </profile>
+        <profile>
+            <id>icon-mac</id>
+            <activation>
+                <os><family>mac</family></os>
+            </activation>
+            <properties>
+                <jpackage.icon>${project.build.directory}/app-icon.icns</jpackage.icon>
             </properties>
         </profile>
 
