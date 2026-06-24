@@ -171,7 +171,7 @@ mvn javafx:run
 
 ```powershell
 Set-Location "C:\path\to\CyberArkAdminTool"
-java -jar .\target\CyberArkAdminTool-1.0-SNAPSHOT.jar
+java -jar .\target\cyberark-vaultops-1.0.jar
 ```
 
 ### Application Icon & Native Packaging
@@ -313,7 +313,7 @@ This is a free, open-source tool maintained in my spare time. If it saves you ti
 supporting its development:
 
 - ☕ **Buy Me a Coffee**: https://buymeacoffee.com/szszcoffee
-- 💖 **GitHub Sponsors**: coming soon
+- 💖 **GitHub Sponsors**: https://github.com/sponsors/SzSz-hub
 
 You can also help just by starring the repo, filing issues, or contributing improvements. Thank you!
 
