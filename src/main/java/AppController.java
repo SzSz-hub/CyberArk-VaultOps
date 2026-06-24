@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -33,7 +34,6 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 public class AppController {
 
@@ -110,6 +110,13 @@ public class AppController {
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
             // Executor already shutting down; nothing to do.
         }
+    }
+
+    // Offline edits are written to an "output" folder next to the running app (the working directory), in a
+    // <timestamp>_<source>/ subfolder, ready to re-import into CyberArk / Idira. Source files are never touched.
+    // After writing, the controller opens the folder via UI.revealFolder so the result is easy to find.
+    private static Path outputRoot() {
+        return Paths.get("output").toAbsolutePath().normalize();
     }
 
     public void loadAll() {
@@ -622,13 +629,14 @@ public class AppController {
             }
         }
 
-        Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
         String sourceLabel = activeSourceName();
         String sourceFolder = activeSourceFolder();
 
         if (!requireFreshFiles("order components", pvConfigPath, policiesPath)) {
             return;
         }
+
+        Path outputRoot = outputRoot();
 
         final List<String> pvOrder = pvDefinitionOrder;
         final Map<String, List<String>> policyOrderMap = policyOrders;
@@ -644,6 +652,7 @@ public class AppController {
                             "output", String.valueOf(result2.outputFolder())));
                     onLoadError.accept("Ordered " + result2.pvReordered() + " definition(s) and "
                             + result2.policiesReordered() + " policy block(s). Output written to " + result2.outputFolder());
+                    ui.revealFolder(result2.outputFolder());
                 },
                 null);
     }
@@ -672,7 +681,7 @@ public class AppController {
             return;
         }
 
-        Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
+        Path outputRoot = outputRoot();
         String sourceLabel = activeSourceName();
         String sourceFolder = activeSourceFolder();
 
@@ -706,6 +715,7 @@ public class AppController {
                         summary += " (skipped " + result.skipped().size() + ")";
                     }
                     onLoadError.accept(summary);
+                    ui.revealFolder(result.outputFolder());
                 },
                 null);
     }
@@ -944,7 +954,7 @@ public class AppController {
             return;
         }
 
-        Path outputRoot = Paths.get("output").toAbsolutePath().normalize();
+        Path outputRoot = outputRoot();
         String sourceLabel = activeSourceName();
         String sourceFolder = activeSourceFolder();
 
@@ -952,8 +962,8 @@ public class AppController {
         runAsync("connection component change",
                 () -> {
                     List<String> resolverIds = replacementCandidates(pvConfigPath, alsoRemoveDefinitions ? ids : List.of());
-                    Function<String, ComponentOperations.EmptyPolicyChoice> resolver =
-                            policyId -> resolveEmptyPolicyOnFxThread(policyId, resolverIds);
+                    ComponentOperations.EmptyPolicyResolver resolver =
+                            (policyId, skipAllowed) -> resolveEmptyPolicyOnFxThread(policyId, skipAllowed, resolverIds);
                     return alsoRemoveDefinitions
                             ? componentOperations.removeConnectionComponents(policiesPath, pvConfigPath, ids, outputRoot,
                                     sourceLabel, sourceFolder, resolver)
@@ -979,6 +989,7 @@ public class AppController {
                     }
                     summary += ". Output written to " + result.outputPolicies().getParent();
                     onLoadError.accept(summary);
+                    ui.revealFolder(result.outputPolicies().getParent());
                 },
                 null);
     }
@@ -1020,15 +1031,16 @@ public class AppController {
         return true;
     }
 
-    private ComponentOperations.EmptyPolicyChoice resolveEmptyPolicyOnFxThread(String policyId, List<String> resolverIds) {
+    private ComponentOperations.EmptyPolicyChoice resolveEmptyPolicyOnFxThread(
+            String policyId, boolean skipAllowed, List<String> resolverIds) {
         if (Platform.isFxApplicationThread()) {
-            return ui.showEmptyPolicyDialog(policyId, resolverIds);
+            return ui.showEmptyPolicyDialog(policyId, resolverIds, skipAllowed);
         }
         java.util.concurrent.CompletableFuture<ComponentOperations.EmptyPolicyChoice> future =
                 new java.util.concurrent.CompletableFuture<>();
         Platform.runLater(() -> {
             try {
-                future.complete(ui.showEmptyPolicyDialog(policyId, resolverIds));
+                future.complete(ui.showEmptyPolicyDialog(policyId, resolverIds, skipAllowed));
             } catch (Throwable error) {
                 future.completeExceptionally(error);
             }
@@ -1432,6 +1444,121 @@ public class AppController {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
+    public void removeOrphanReference(PoliciesParser.ComponentAssignmentEntry orphan) {
+        if (orphan == null || orphan.componentId() == null || orphan.componentId().isBlank()) {
+            onLoadError.accept("Select an orphaned reference first.");
+            return;
+        }
+        String id = orphan.componentId().trim();
+        String policyId = orphan.policyId() == null ? "" : orphan.policyId().trim();
+        runOrphanRemoval(List.of(id), policyId,
+                "Remove orphaned reference",
+                "Remove orphaned component '" + id + "' from policy '" + policyId + "'?\n\n"
+                        + "This component has no definition in PVConfiguration.xml, so only Policies.xml is updated. "
+                        + "The source files are not modified; an updated Policies.xml and a changelog are written to the "
+                        + "output folder. If this leaves a policy with no connection component, you will be asked for a "
+                        + "replacement.");
+    }
+
+    public void removeOrphanComponentEverywhere(PoliciesParser.ComponentAssignmentEntry orphan) {
+        if (orphan == null || orphan.componentId() == null || orphan.componentId().isBlank()) {
+            onLoadError.accept("Select an orphaned reference first.");
+            return;
+        }
+        String id = orphan.componentId().trim();
+        runOrphanRemoval(List.of(id), null,
+                "Remove orphaned component from all policies",
+                "Remove orphaned component '" + id + "' from every policy it is assigned to?\n\n"
+                        + "This component has no definition in PVConfiguration.xml, so only Policies.xml is updated. "
+                        + "The source files are not modified; an updated Policies.xml and a changelog are written to the "
+                        + "output folder. Any policy left empty will prompt for a replacement.");
+    }
+
+    public void removeAllOrphans(List<PoliciesParser.ComponentAssignmentEntry> orphans) {
+        if (orphans == null || orphans.isEmpty()) {
+            onLoadError.accept("There are no orphaned references to remove.");
+            return;
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        for (PoliciesParser.ComponentAssignmentEntry orphan : orphans) {
+            if (orphan != null && orphan.componentId() != null && !orphan.componentId().isBlank()) {
+                ids.add(orphan.componentId().trim());
+            }
+        }
+        if (ids.isEmpty()) {
+            onLoadError.accept("There are no orphaned references to remove.");
+            return;
+        }
+        runOrphanRemoval(new ArrayList<>(ids), null,
+                "Remove all orphaned components",
+                "Remove all " + ids.size() + " orphaned component(s) from every policy they are assigned to?\n\n"
+                        + String.join(", ", ids)
+                        + "\n\nThese components have no definition in PVConfiguration.xml, so only Policies.xml is updated. "
+                        + "The source files are not modified; an updated Policies.xml and a changelog are written to the "
+                        + "output folder. Any policy left empty will prompt for a replacement.");
+    }
+
+    private void runOrphanRemoval(List<String> componentIds, String policyScope, String confirmTitle, String confirmMessage) {
+        if (componentIds == null || componentIds.isEmpty()) {
+            onLoadError.accept("There are no orphaned references to remove.");
+            return;
+        }
+
+        String policiesPath;
+        String pvConfigPath;
+        try {
+            policiesPath = getActivePoliciesPath();
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("orphaned reference removal", e);
+            return;
+        }
+
+        if (!ui.confirm(confirmTitle, confirmMessage)) {
+            return;
+        }
+
+        if (!requireFreshFiles("remove orphaned references", policiesPath)) {
+            return;
+        }
+
+        Path outputRoot = outputRoot();
+        String sourceLabel = activeSourceName();
+        String sourceFolder = activeSourceFolder();
+        List<String> ids = new ArrayList<>(componentIds);
+
+        onLoadError.accept("Removing " + ids.size() + " orphaned reference(s) ...");
+        runAsync("orphaned reference removal",
+                () -> {
+                    List<String> resolverIds = replacementCandidates(pvConfigPath, ids);
+                    ComponentOperations.EmptyPolicyResolver resolver =
+                            (policyId, skipAllowed) -> resolveEmptyPolicyOnFxThread(policyId, skipAllowed, resolverIds);
+                    return policyScope == null
+                            ? componentOperations.unlinkConnectionComponents(policiesPath, ids, outputRoot,
+                                    sourceLabel, sourceFolder, resolver)
+                            : componentOperations.unlinkConnectionComponentFromPolicy(policiesPath, ids.get(0), policyScope,
+                                    outputRoot, sourceLabel, sourceFolder, resolver);
+                },
+                result -> {
+                    if (result.cancelled()) {
+                        onLoadError.accept("Operation cancelled. No files were written.");
+                        return;
+                    }
+
+                    audit.record("offline.unlink.orphan", Map.of(
+                            "source", sourceLabel,
+                            "components", String.join(",", ids),
+                            "policyScope", policyScope == null ? "ALL" : policyScope,
+                            "assignmentsRemoved", String.valueOf(result.totalRemovedAssignments()),
+                            "output", String.valueOf(result.outputPolicies() == null ? "" : result.outputPolicies().getParent())));
+
+                    onLoadError.accept("Removed " + result.totalRemovedAssignments() + " orphaned reference(s). "
+                            + "Output written to " + result.outputPolicies().getParent());
+                    ui.revealFolder(result.outputPolicies().getParent());
+                },
+                null);
+    }
+
     private AppSettings.SourceProfile findProfile(String sourceId) {
         if (sourceId == null) {
             return null;
@@ -1442,6 +1569,65 @@ public class AppController {
             }
         }
         return null;
+    }
+
+    // -------------------------------------------------------------------------------- Populate empty policies
+
+    public void populateEmptyPolicies() {
+        String policiesPath;
+        String pvConfigPath;
+        try {
+            policiesPath = getActivePoliciesPath();
+            pvConfigPath = getActivePvConfigurationPath();
+        } catch (Exception e) {
+            reportLoadError("populate empty policies", e);
+            return;
+        }
+
+        if (!ui.confirm("Populate empty policies",
+                "Scan " + activeSourceName() + " for policies that have no connection component and populate each "
+                        + "with a replacement?\n\nYou'll be prompted to choose a component (with an \"apply to all\" "
+                        + "option). The source files are not modified; an updated Policies.xml and a changelog are "
+                        + "written to the output folder.")) {
+            return;
+        }
+
+        if (!requireFreshFiles("populate empty policies", policiesPath)) {
+            return;
+        }
+
+        Path outputRoot = outputRoot();
+        String sourceLabel = activeSourceName();
+        String sourceFolder = activeSourceFolder();
+
+        onLoadError.accept("Scanning for empty policies ...");
+        runAsync("populate empty policies",
+                () -> {
+                    List<String> resolverIds = replacementCandidates(pvConfigPath, List.of());
+                    ComponentOperations.EmptyPolicyResolver resolver =
+                            (policyId, skipAllowed) -> resolveEmptyPolicyOnFxThread(policyId, skipAllowed, resolverIds);
+                    return componentOperations.populateEmptyPolicies(policiesPath, outputRoot,
+                            sourceLabel, sourceFolder, resolver);
+                },
+                result -> {
+                    if (result.cancelled()) {
+                        onLoadError.accept("Operation cancelled. No files were written.");
+                        return;
+                    }
+                    if (result.outputPolicies() == null) {
+                        onLoadError.accept("No policies were populated in " + sourceLabel
+                                + " (none empty, or all were skipped). Nothing to write.");
+                        return;
+                    }
+                    audit.record("offline.populate", Map.of(
+                            "source", sourceLabel,
+                            "policiesPopulated", String.valueOf(result.emptyPoliciesFixed().size()),
+                            "output", String.valueOf(result.outputPolicies().getParent())));
+                    onLoadError.accept("Populated " + result.emptyPoliciesFixed().size()
+                            + " empty policy(ies). Output written to " + result.outputPolicies().getParent());
+                    ui.revealFolder(result.outputPolicies().getParent());
+                },
+                null);
     }
 
     private Path folderFor(AppSettings.SourceProfile profile) {

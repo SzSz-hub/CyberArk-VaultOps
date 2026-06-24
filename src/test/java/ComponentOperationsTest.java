@@ -7,7 +7,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,12 +23,12 @@ class ComponentOperationsTest {
     private final PVConfigurationParser pvParser = new PVConfigurationParser();
     private final PoliciesParser policiesParser = new PoliciesParser();
 
-    private static final Function<String, ComponentOperations.EmptyPolicyChoice> ADD_RDP =
-            id -> ComponentOperations.EmptyPolicyChoice.add("PSM-RDP", true, false);
-    private static final Function<String, ComponentOperations.EmptyPolicyChoice> CANCEL =
-            id -> ComponentOperations.EmptyPolicyChoice.cancel();
-    private static final Function<String, ComponentOperations.EmptyPolicyChoice> FAIL_IF_CALLED =
-            id -> {
+    private static final ComponentOperations.EmptyPolicyResolver ADD_RDP =
+            (id, skipAllowed) -> ComponentOperations.EmptyPolicyChoice.add("PSM-RDP", true, false);
+    private static final ComponentOperations.EmptyPolicyResolver CANCEL =
+            (id, skipAllowed) -> ComponentOperations.EmptyPolicyChoice.cancel();
+    private static final ComponentOperations.EmptyPolicyResolver FAIL_IF_CALLED =
+            (id, skipAllowed) -> {
                 throw new AssertionError("empty-policy resolver should not have been called for " + id);
             };
 
@@ -276,6 +275,195 @@ class ComponentOperationsTest {
 
         var multi = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "MultiPolicy");
         assertFalse(multi.stream().anyMatch(c -> c.componentId().equals("WebConnection")));
+    }
+
+    // -------------------------------------------------------------------- scoped unlink (orphan removal)
+
+    @Test
+    @DisplayName("Scoped unlink removes the component from only the target policy")
+    void scopedUnlinkAffectsOnlyTargetPolicy(@TempDir Path tmp) throws Exception {
+        Path policies = source(tmp.resolve("src"), "Policies.xml", "Policies.xml");
+        Path out = tmp.resolve("out");
+
+        ComponentOperations.RemovalResult result = ops.unlinkConnectionComponentFromPolicy(
+                policies.toString(), "PSM-SSH", "MultiPolicy", out, "LPC", null, FAIL_IF_CALLED);
+
+        assertFalse(result.cancelled());
+        assertEquals(1, result.totalRemovedAssignments());
+        assertEquals(0, result.removedDefinitions());
+        assertNull(result.outputPvConfiguration());
+
+        var multi = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "MultiPolicy");
+        assertFalse(multi.stream().anyMatch(c -> c.componentId().equals("PSM-SSH")));
+
+        // The same component in another policy must be left untouched.
+        var lone = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "LonePolicy");
+        assertTrue(lone.stream().anyMatch(c -> c.componentId().equals("PSM-SSH")));
+    }
+
+    @Test
+    @DisplayName("Scoped unlink that empties a policy asks for a replacement")
+    void scopedUnlinkEmptyPolicyAddsReplacement(@TempDir Path tmp) throws Exception {
+        Path policies = source(tmp.resolve("src"), "Policies.xml", "Policies.xml");
+        Path out = tmp.resolve("out");
+
+        ComponentOperations.EmptyPolicyResolver addSsh =
+                (id, skipAllowed) -> ComponentOperations.EmptyPolicyChoice.add("PSM-SSH", true, false);
+
+        ComponentOperations.RemovalResult result = ops.unlinkConnectionComponentFromPolicy(
+                policies.toString(), "PSM-RDP", "SinglePolicy", out, "LPC", null, addSsh);
+
+        assertFalse(result.cancelled());
+        assertEquals(1, result.totalRemovedAssignments());
+
+        var single = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "SinglePolicy");
+        assertFalse(single.stream().anyMatch(c -> c.componentId().equals("PSM-RDP")));
+        assertTrue(single.stream().anyMatch(c -> c.componentId().equals("PSM-SSH")));
+    }
+
+    @Test
+    @DisplayName("Scoped unlink is cancelled when the empty-policy prompt is cancelled")
+    void scopedUnlinkCancelled(@TempDir Path tmp) throws Exception {
+        Path policies = source(tmp.resolve("src"), "Policies.xml", "Policies.xml");
+        Path out = tmp.resolve("out");
+
+        ComponentOperations.RemovalResult result = ops.unlinkConnectionComponentFromPolicy(
+                policies.toString(), "PSM-RDP", "SinglePolicy", out, "LPC", null, CANCEL);
+
+        assertTrue(result.cancelled());
+        assertNull(result.outputPolicies());
+        assertFalse(Files.exists(out));
+    }
+
+    // --------------------------------------------------------------------- populate empty policies
+
+    private static final String POLICIES_WITH_EMPTY = """
+            <PasswordVaultPolicies>
+              <Devices>
+                <Device Name="App">
+                  <Policies>
+                    <Policy ID="Normal" PlatformBaseID="WinX">
+                      <ConnectionComponents>
+                        <ConnectionComponent Id="PSM-RDP" Enable="Yes" />
+                        <ConnectionComponent Id="WebConnection" Enable="Yes" />
+                      </ConnectionComponents>
+                    </Policy>
+                    <Policy ID="EmptyOne" PlatformBaseID="WinY">
+                      <ConnectionComponents>
+                      </ConnectionComponents>
+                    </Policy>
+                  </Policies>
+                </Device>
+              </Devices>
+            </PasswordVaultPolicies>
+            """;
+
+    private Path writePolicies(Path dir, String xml) throws Exception {
+        Files.createDirectories(dir);
+        Path file = dir.resolve("Policies.xml");
+        Files.writeString(file, xml);
+        return file;
+    }
+
+    @Test
+    @DisplayName("Unlink also populates a pre-existing empty policy (no validation failure)")
+    void unlinkPopulatesPreExistingEmptyPolicy(@TempDir Path tmp) throws Exception {
+        Path policies = writePolicies(tmp.resolve("src"), POLICIES_WITH_EMPTY);
+        Path out = tmp.resolve("out");
+        ComponentOperations.EmptyPolicyResolver addRdp =
+                (id, skipAllowed) -> ComponentOperations.EmptyPolicyChoice.add("PSM-RDP", true, true);
+
+        ComponentOperations.RemovalResult result = ops.unlinkConnectionComponents(
+                policies.toString(), List.of("WebConnection"), out, "LPC", null, addRdp);
+
+        assertFalse(result.cancelled());
+        assertNotNull(result.outputPolicies());
+
+        var empty = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "EmptyOne");
+        assertTrue(empty.stream().anyMatch(c -> c.componentId().equals("PSM-RDP")));
+
+        var normal = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "Normal");
+        assertFalse(normal.stream().anyMatch(c -> c.componentId().equals("WebConnection")));
+    }
+
+    @Test
+    @DisplayName("Populate empty policies fills policies that have no connection component")
+    void populateEmptyPoliciesFills(@TempDir Path tmp) throws Exception {
+        Path policies = writePolicies(tmp.resolve("src"), POLICIES_WITH_EMPTY);
+        Path out = tmp.resolve("out");
+        ComponentOperations.EmptyPolicyResolver addRdp =
+                (id, skipAllowed) -> ComponentOperations.EmptyPolicyChoice.add("PSM-RDP", true, true);
+
+        ComponentOperations.RemovalResult result = ops.populateEmptyPolicies(
+                policies.toString(), out, "LPC", null, addRdp);
+
+        assertFalse(result.cancelled());
+        assertNotNull(result.outputPolicies());
+
+        var empty = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "EmptyOne");
+        assertTrue(empty.stream().anyMatch(c -> c.componentId().equals("PSM-RDP")));
+    }
+
+    @Test
+    @DisplayName("Populate empty policies writes nothing when there are none")
+    void populateEmptyPoliciesNoop(@TempDir Path tmp) throws Exception {
+        Path policies = source(tmp.resolve("src"), "Policies.xml", "Policies.xml");
+        Path out = tmp.resolve("out");
+
+        ComponentOperations.RemovalResult result = ops.populateEmptyPolicies(
+                policies.toString(), out, "LPC", null, FAIL_IF_CALLED);
+
+        assertFalse(result.cancelled());
+        assertNull(result.outputPolicies());
+        assertFalse(Files.exists(out));
+    }
+
+    @Test
+    @DisplayName("A pre-existing empty policy may be skipped (left empty) — skip is allowed")
+    void unlinkSkipsPreExistingEmptyPolicy(@TempDir Path tmp) throws Exception {
+        Path policies = writePolicies(tmp.resolve("src"), POLICIES_WITH_EMPTY);
+        Path out = tmp.resolve("out");
+        ComponentOperations.EmptyPolicyResolver skip = (id, skipAllowed) -> {
+            assertTrue(skipAllowed, "a pre-existing empty policy must allow skipping");
+            return ComponentOperations.EmptyPolicyChoice.skip(true);
+        };
+
+        ComponentOperations.RemovalResult result = ops.unlinkConnectionComponents(
+                policies.toString(), List.of("WebConnection"), out, "LPC", null, skip);
+
+        assertFalse(result.cancelled());
+        assertNotNull(result.outputPolicies());
+
+        var empty = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "EmptyOne");
+        assertTrue(empty.isEmpty());
+    }
+
+    @Test
+    @DisplayName("A policy emptied by the operation is required (skip not allowed) and gets repopulated")
+    void emptiedPolicyIsRequiredNotSkippable(@TempDir Path tmp) throws Exception {
+        Path policies = writePolicies(tmp.resolve("src"), POLICIES_WITH_EMPTY);
+        Path out = tmp.resolve("out");
+        boolean[] sawRequired = {false};
+        ComponentOperations.EmptyPolicyResolver resolver = (id, skipAllowed) -> {
+            if ("Normal".equals(id)) {
+                sawRequired[0] = true;
+                assertFalse(skipAllowed, "a policy emptied by the operation must NOT allow skipping");
+                return ComponentOperations.EmptyPolicyChoice.add("PSM-SSH", true, false);
+            }
+            return ComponentOperations.EmptyPolicyChoice.skip(true);
+        };
+
+        ComponentOperations.RemovalResult result = ops.unlinkConnectionComponents(
+                policies.toString(), List.of("PSM-RDP", "WebConnection"), out, "LPC", null, resolver);
+
+        assertFalse(result.cancelled());
+        assertTrue(sawRequired[0]);
+
+        var normal = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "Normal");
+        assertTrue(normal.stream().anyMatch(c -> c.componentId().equals("PSM-SSH")));
+
+        var empty = policiesParser.getComponentsForPolicy(result.outputPolicies().toString(), "EmptyOne");
+        assertTrue(empty.isEmpty());
     }
 
     // ------------------------------------------------------------------------------------ sanitize helper
