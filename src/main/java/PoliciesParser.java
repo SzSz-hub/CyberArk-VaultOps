@@ -187,6 +187,38 @@ public class PoliciesParser extends Parser {
         return rows;
     }
 
+    public List<ComponentAssignmentEntry> getAllComponentAssignments(String policiesPath) throws Exception {
+        Document doc = loadDocument(policiesPath);
+        NodeList policyNodes = doc.getElementsByTagName("Policy");
+        List<ComponentAssignmentEntry> rows = new ArrayList<>();
+
+        for (int i = 0; i < policyNodes.getLength(); i++) {
+            Node node = policyNodes.item(i);
+            if (node.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+
+            Element policy = (Element) node;
+            String policyId = attr(policy, "ID");
+            String platformId = attr(policy, "PlatformBaseID");
+            if (platformId.isBlank()) {
+                platformId = findDeviceName(policy);
+            }
+
+            for (Element component : listConnectionComponents(policy)) {
+                rows.add(new ComponentAssignmentEntry(
+                        platformId,
+                        policyId,
+                        attr(component, "Id"),
+                        boolLabel(attr(component, "Enable")),
+                        hasOverrides(component) ? "Yes" : "No"
+                ));
+            }
+        }
+
+        return rows;
+    }
+
     public List<UsagePolicyEntry> getPoliciesForUsage(String policiesPath, String usageIdFilter) throws Exception {
         String targetUsageId = usageIdFilter == null ? "" : usageIdFilter.trim();
         if (targetUsageId.isBlank()) {

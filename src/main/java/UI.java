@@ -108,6 +108,7 @@ public class UI {
     private Runnable onAppClose = NO_OP;
     private Runnable onOrderComponents = NO_OP;
     private Runnable onImportPsmComponent = NO_OP;
+    private Runnable onFindOrphanComponents = NO_OP;
     private Runnable onPvwaConnect = NO_OP;
     private Runnable onPvwaDisconnect = NO_OP;
     private Runnable onImportFromFileOnline = NO_OP;
@@ -324,6 +325,10 @@ public class UI {
         this.onOrderComponents = safeRunnable(onOrderComponents);
     }
 
+    void setOnFindOrphanComponents(Runnable onFindOrphanComponents) {
+        this.onFindOrphanComponents = safeRunnable(onFindOrphanComponents);
+    }
+
     void setOnImportPsmComponent(Runnable onImportPsmComponent) {
         this.onImportPsmComponent = safeRunnable(onImportPsmComponent);
     }
@@ -444,10 +449,14 @@ public class UI {
         removeComponentsItem.setOnAction(event -> removeSelectedComponentsFromMenu());
         MenuItem unlinkComponentsItem = new MenuItem("Unlink Selected from Policies...");
         unlinkComponentsItem.setOnAction(event -> unlinkSelectedComponentsFromMenu());
+        MenuItem findOrphansItem = new MenuItem("Find Orphaned Component References...");
+        findOrphansItem.setOnAction(event -> onFindOrphanComponents.run());
         editMenu.getItems().addAll(
                 orderComponentsItem,
                 removeComponentsItem,
-                unlinkComponentsItem
+                unlinkComponentsItem,
+                new SeparatorMenuItem(),
+                findOrphansItem
         );
 
         Menu compareMenu = new Menu("Compare");
@@ -1538,6 +1547,104 @@ public class UI {
 
     private static boolean contains(String value, String lowerCaseQuery) {
         return value != null && value.toLowerCase().contains(lowerCaseQuery);
+    }
+
+    void showOrphanComponents(OrphanScan.Result result) {
+        if (result == null) {
+            return;
+        }
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.setTitle("Orphaned Component References \u2014 " + result.sourceLabel());
+        if (primaryStage != null) {
+            dialog.getIcons().setAll(primaryStage.getIcons());
+        }
+
+        Label title = new Label("Orphaned connection component references");
+        title.getStyleClass().add("details-title");
+        Label subtitle = new Label("Source:  " + result.sourceLabel());
+        subtitle.getStyleClass().add("details-source");
+
+        int orphanCount = result.orphans() == null ? 0 : result.orphans().size();
+        Label summary = new Label(orphanCount == 0
+                ? "No orphans \u2014 every component assigned to a policy exists in PVConfiguration.xml."
+                : orphanCount + " assignment(s) reference a component that is not defined in PVConfiguration.xml.");
+        summary.getStyleClass().add(orphanCount == 0 ? "status-connected" : "status-stale");
+
+        Label counts = new Label(result.definedComponents() + " defined component(s)  \u2022  "
+                + result.scannedAssignments() + " assignment(s) scanned");
+        counts.getStyleClass().add("details-source");
+
+        TextField searchField = new TextField();
+        searchField.setPromptText("Filter component / platform / policy\u2026");
+        searchField.setMaxWidth(Double.MAX_VALUE);
+
+        ObservableList<PoliciesParser.ComponentAssignmentEntry> allRows =
+                FXCollections.observableArrayList(result.orphans() == null ? List.of() : result.orphans());
+        FilteredList<PoliciesParser.ComponentAssignmentEntry> filteredRows = new FilteredList<>(allRows, row -> true);
+        searchField.textProperty().addListener((obs, oldValue, newValue) -> {
+            String query = newValue == null ? "" : newValue.trim().toLowerCase();
+            filteredRows.setPredicate(row -> {
+                if (query.isEmpty()) {
+                    return true;
+                }
+                return contains(row.componentId(), query)
+                        || contains(row.platformId(), query)
+                        || contains(row.policyId(), query);
+            });
+        });
+
+        javafx.collections.transformation.SortedList<PoliciesParser.ComponentAssignmentEntry> sortedRows =
+                new javafx.collections.transformation.SortedList<>(filteredRows);
+
+        TableView<PoliciesParser.ComponentAssignmentEntry> table = new TableView<>(sortedRows);
+        sortedRows.comparatorProperty().bind(table.comparatorProperty());
+        table.getStyleClass().add("modern-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        table.setPlaceholder(new Label("No orphaned references"));
+
+        TableColumn<PoliciesParser.ComponentAssignmentEntry, String> componentColumn = new TableColumn<>("Component Id");
+        componentColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().componentId()));
+        componentColumn.setCellFactory(wrappingCellFactory());
+
+        TableColumn<PoliciesParser.ComponentAssignmentEntry, String> platformColumn = new TableColumn<>("Platform");
+        platformColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().platformId()));
+        platformColumn.setCellFactory(wrappingCellFactory());
+
+        TableColumn<PoliciesParser.ComponentAssignmentEntry, String> policyColumn = new TableColumn<>("Policy");
+        policyColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().policyId()));
+        policyColumn.setCellFactory(wrappingCellFactory());
+
+        TableColumn<PoliciesParser.ComponentAssignmentEntry, String> enabledColumn = new TableColumn<>("Enabled");
+        enabledColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().componentEnabled()));
+
+        TableColumn<PoliciesParser.ComponentAssignmentEntry, String> overridesColumn = new TableColumn<>("Overrides");
+        overridesColumn.setCellValueFactory(data ->
+                new javafx.beans.property.SimpleStringProperty(data.getValue().hasOverrides()));
+
+        table.getColumns().addAll(componentColumn, platformColumn, policyColumn, enabledColumn, overridesColumn);
+        VBox.setVgrow(table, Priority.ALWAYS);
+
+        HBox controls = new HBox(12, summary, searchField);
+        controls.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(searchField, Priority.ALWAYS);
+
+        VBox headerBox = new VBox(2, title, subtitle, counts);
+        headerBox.getStyleClass().add("details-header");
+
+        VBox content = new VBox(10, headerBox, controls, table);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = new Scene(content, 900, 640);
+        applyTheme(scene);
+        dialog.setScene(scene);
+        dialog.show();
     }
 
     private static <S> javafx.util.Callback<TableColumn<S, String>, TableCell<S, String>> wrappingCellFactory() {

@@ -1381,6 +1381,57 @@ public class AppController {
         return new Parser.XmlNode("Usage", attributes, List.of());
     }
 
+    // ---------------------------------------------------------------------------------------- Orphan scan
+
+    public void findOrphanComponentReferences() {
+        String pvPath;
+        String policiesPath;
+        String sourceLabel;
+        try {
+            pvPath = getActivePvConfigurationPath();
+            policiesPath = getActivePoliciesPath();
+            sourceLabel = activeSourceName();
+        } catch (Exception error) {
+            onLoadError.accept(messageOf(error));
+            return;
+        }
+        runAsync("orphaned component references",
+                () -> buildOrphanScan(pvPath, policiesPath, sourceLabel),
+                ui::showOrphanComponents,
+                null);
+    }
+
+    private OrphanScan.Result buildOrphanScan(String pvPath, String policiesPath, String sourceLabel) throws Exception {
+        Set<String> definedIds = new HashSet<>();
+        for (PVConfigurationParser.ConnectionComponentEntry component : pvParser.GetConnectionComponents(pvPath)) {
+            if (component.id() != null && !component.id().isBlank()) {
+                definedIds.add(component.id().trim().toLowerCase(Locale.ROOT));
+            }
+        }
+
+        List<PoliciesParser.ComponentAssignmentEntry> assignments = policiesParser.getAllComponentAssignments(policiesPath);
+        List<PoliciesParser.ComponentAssignmentEntry> orphans = new ArrayList<>();
+        for (PoliciesParser.ComponentAssignmentEntry assignment : assignments) {
+            String componentId = assignment.componentId();
+            if (componentId == null || componentId.isBlank()) {
+                continue;
+            }
+            if (!definedIds.contains(componentId.trim().toLowerCase(Locale.ROOT))) {
+                orphans.add(assignment);
+            }
+        }
+        orphans.sort(Comparator
+                .comparing((PoliciesParser.ComponentAssignmentEntry entry) -> safeLower(entry.componentId()))
+                .thenComparing(entry -> safeLower(entry.platformId()))
+                .thenComparing(entry -> safeLower(entry.policyId())));
+
+        return new OrphanScan.Result(sourceLabel, definedIds.size(), assignments.size(), orphans);
+    }
+
+    private static String safeLower(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
     private AppSettings.SourceProfile findProfile(String sourceId) {
         if (sourceId == null) {
             return null;
