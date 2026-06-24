@@ -1,3 +1,4 @@
+import java.awt.image.BufferedImage;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -30,17 +31,15 @@ public final class IconExporter {
         Path outputDir = Paths.get(args.length > 0 ? args[0] : ".");
         Files.createDirectories(outputDir);
 
-        List<byte[]> pngs = new ArrayList<>();
         List<Integer> sizes = new ArrayList<>();
         for (int size : AppIcon.ICON_SIZES) {
             byte[] png = AppIcon.renderPng(size);
             Files.write(outputDir.resolve("app-icon-" + size + ".png"), png);
-            pngs.add(png);
             sizes.add(size);
         }
 
         Path icoPath = outputDir.resolve("app-icon.ico");
-        writeIco(pngs, sizes, icoPath);
+        writeIco(sizes, icoPath);
         System.out.println("Wrote " + icoPath.toAbsolutePath());
 
         Path icnsPath = outputDir.resolve("app-icon.icns");
@@ -100,7 +99,21 @@ public final class IconExporter {
         }
     }
 
-    private static void writeIco(List<byte[]> pngs, List<Integer> sizes, Path target) throws IOException {        int count = pngs.size();
+    private static void writeIco(List<Integer> sizes, Path target) throws IOException {
+        // Windows Explorer's file/folder icon renderer cannot reliably decode PNG-compressed
+        // ICO entries for the small sizes, so it falls back to the default JVM icon. Emit the
+        // sub-256 sizes as uncompressed BMP/DIB (which Explorer always understands) and keep PNG
+        // only for the 256x256 entry where the ICO format requires it.
+        int count = sizes.size();
+        List<byte[]> images = new ArrayList<>();
+        for (int size : sizes) {
+            if (size >= 256) {
+                images.add(AppIcon.renderPng(size));
+            } else {
+                images.add(bmpIconData(AppIcon.renderImage(size)));
+            }
+        }
+
         try (OutputStream os = new BufferedOutputStream(Files.newOutputStream(target))) {
             // ICONDIR header.
             ByteBuffer header = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
@@ -113,7 +126,7 @@ public final class IconExporter {
             int offset = 6 + count * 16;
             for (int i = 0; i < count; i++) {
                 int size = sizes.get(i);
-                byte[] png = pngs.get(i);
+                byte[] data = images.get(i);
 
                 ByteBuffer entry = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
                 entry.put((byte) (size >= 256 ? 0 : size)); // width  (0 means 256)
@@ -122,17 +135,66 @@ public final class IconExporter {
                 entry.put((byte) 0);   // reserved
                 entry.putShort((short) 1);  // color planes
                 entry.putShort((short) 32); // bits per pixel
-                entry.putInt(png.length);   // size of image data
+                entry.putInt(data.length);  // size of image data
                 entry.putInt(offset);       // offset of image data
                 os.write(entry.array());
 
-                offset += png.length;
+                offset += data.length;
             }
 
             // Image payloads.
-            for (byte[] png : pngs) {
-                os.write(png);
+            for (byte[] data : images) {
+                os.write(data);
             }
         }
+    }
+
+    private static byte[] bmpIconData(BufferedImage image) {
+        // BITMAPINFOHEADER + 32-bit bottom-up BGRA XOR bitmap + 1bpp AND mask (no embedded BMP file header).
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int xorStride = width * 4;
+        int andStride = ((width + 31) / 32) * 4;
+        int xorSize = xorStride * height;
+        int andSize = andStride * height;
+
+        ByteBuffer buffer = ByteBuffer.allocate(40 + xorSize + andSize).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.putInt(40);            // biSize
+        buffer.putInt(width);         // biWidth
+        buffer.putInt(height * 2);    // biHeight (doubled: XOR bitmap + AND mask)
+        buffer.putShort((short) 1);   // biPlanes
+        buffer.putShort((short) 32);  // biBitCount
+        buffer.putInt(0);             // biCompression = BI_RGB
+        buffer.putInt(xorSize + andSize); // biSizeImage
+        buffer.putInt(0);             // biXPelsPerMeter
+        buffer.putInt(0);             // biYPelsPerMeter
+        buffer.putInt(0);             // biClrUsed
+        buffer.putInt(0);             // biClrImportant
+
+        // XOR color data, bottom-up, BGRA.
+        for (int y = height - 1; y >= 0; y--) {
+            for (int x = 0; x < width; x++) {
+                int argb = image.getRGB(x, y);
+                buffer.put((byte) (argb & 0xFF));         // blue
+                buffer.put((byte) ((argb >>> 8) & 0xFF)); // green
+                buffer.put((byte) ((argb >>> 16) & 0xFF));// red
+                buffer.put((byte) ((argb >>> 24) & 0xFF));// alpha
+            }
+        }
+
+        // AND mask, bottom-up, 1 bit per pixel (1 = transparent). The 32-bit alpha already drives
+        // blending, but a valid mask must still be present.
+        for (int y = height - 1; y >= 0; y--) {
+            byte[] row = new byte[andStride];
+            for (int x = 0; x < width; x++) {
+                int alpha = (image.getRGB(x, y) >>> 24) & 0xFF;
+                if (alpha == 0) {
+                    row[x / 8] |= (byte) (0x80 >> (x % 8));
+                }
+            }
+            buffer.put(row);
+        }
+
+        return buffer.array();
     }
 }

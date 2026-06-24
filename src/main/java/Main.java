@@ -24,6 +24,7 @@ public class Main extends Application {
         ui.setOnConnectionComponentRemove(controller::removeConnectionComponents);
         ui.setOnConnectionComponentUnlink(controller::unlinkConnectionComponents);
         ui.setOnOrderComponents(controller::orderConnectionComponents);
+        ui.setOnFindOrphanComponents(controller::findOrphanComponentReferences);
         ui.setOnImportPsmComponent(controller::importPsmComponents);
         ui.setOnPvwaConnect(controller::connectToPvwa);
         ui.setOnPvwaDisconnect(controller::disconnectFromPvwa);
