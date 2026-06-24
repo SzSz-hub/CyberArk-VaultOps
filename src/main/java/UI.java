@@ -56,6 +56,9 @@ public class UI {
     private static final String APP_NAME = "CyberArk / Idira VaultOps";
     private static final String APP_VERSION = loadAppVersion();
     private static final String GITHUB_URL = "https://github.com/SzSz-hub/CyberArk-VaultOps";
+    private static final String BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/szszcoffee";
+    // GitHub Sponsors is planned; leave blank until the profile is live and the link will appear automatically.
+    private static final String GITHUB_SPONSORS_URL = "";
     // CyberArk Self-Hosted PAM was rebranded as Idira by Palo Alto Networks (acquired Feb 2026).
     // The tool works with both; this label is reused wherever we reference the managed product.
     private static final String PAM_PRODUCT = "CyberArk / Idira (Palo Alto Networks)";
@@ -2411,12 +2414,24 @@ public class UI {
         HBox linkRow = new HBox(6, projectLabel, githubLink);
         linkRow.setAlignment(Pos.CENTER_LEFT);
 
-        // Placeholder for a future donate / support banner (Buy Me a Coffee, etc.).
         VBox supportArea = new VBox(4);
         supportArea.getStyleClass().add("about-support");
-        Label supportLabel = new Label("Support is coming soon.");
+        Label supportLabel = new Label("If this tool saves you time, you can support its development:");
+        supportLabel.setWrapText(true);
         supportLabel.getStyleClass().add("about-support-note");
         supportArea.getChildren().add(supportLabel);
+
+        Hyperlink coffeeLink = new Hyperlink("Buy me a coffee");
+        coffeeLink.getStyleClass().add("about-link");
+        coffeeLink.setOnAction(event -> openInBrowser(BUY_ME_A_COFFEE_URL));
+        supportArea.getChildren().add(coffeeLink);
+
+        if (GITHUB_SPONSORS_URL != null && !GITHUB_SPONSORS_URL.isBlank()) {
+            Hyperlink sponsorsLink = new Hyperlink("GitHub Sponsors");
+            sponsorsLink.getStyleClass().add("about-link");
+            sponsorsLink.setOnAction(event -> openInBrowser(GITHUB_SPONSORS_URL));
+            supportArea.getChildren().add(sponsorsLink);
+        }
 
         Region spacer = new Region();
         VBox.setVgrow(spacer, Priority.ALWAYS);
