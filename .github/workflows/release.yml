@@ -63,7 +63,10 @@ jobs:
         shell: bash
         run: |
           name="CyberArkVaultOps-${{ steps.ver.outputs.version }}-${{ matrix.classifier }}"
-          tar -czf "$name.tar.gz" -C "target/dist" "CyberArk VaultOps"
+          # jpackage names the app-image "CyberArk VaultOps" on Linux but "CyberArk VaultOps.app" on macOS,
+          # so archive whichever single app-image directory actually landed in target/dist.
+          app="$(basename "$(find target/dist -mindepth 1 -maxdepth 1 -type d | head -n1)")"
+          tar -czf "$name.tar.gz" -C "target/dist" "$app"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
 
       - name: Upload build artifacts
