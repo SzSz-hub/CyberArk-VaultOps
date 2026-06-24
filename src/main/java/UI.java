@@ -57,7 +57,6 @@ public class UI {
     private static final String APP_VERSION = loadAppVersion();
     private static final String GITHUB_URL = "https://github.com/SzSz-hub/CyberArk-VaultOps";
     private static final String BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/szszcoffee";
-    // GitHub Sponsors profile (pending approval at time of wiring); the About link appears whenever this is set.
     private static final String GITHUB_SPONSORS_URL = "https://github.com/sponsors/SzSz-hub";
     // CyberArk Self-Hosted PAM was rebranded as Idira by Palo Alto Networks (acquired Feb 2026).
     // The tool works with both; this label is reused wherever we reference the managed product.
