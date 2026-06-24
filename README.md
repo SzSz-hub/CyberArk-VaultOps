@@ -306,3 +306,15 @@ git push origin v1.0.0
 - Filtering on typed columns is responsive
 - Per-environment caching reduces repeated parsing
 - File staleness checks are lightweight (file metadata only)
+
+## Support
+
+This is a free, open-source tool maintained in my spare time. If it saves you time, consider
+supporting its development:
+
+- ☕ **Buy Me a Coffee**: https://buymeacoffee.com/szszcoffee
+- 💖 **GitHub Sponsors**: coming soon
+
+You can also help just by starring the repo, filing issues, or contributing improvements. Thank you!
+
+
