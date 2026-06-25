@@ -3,6 +3,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -74,18 +75,7 @@ public class PvwaClient {
 
         String url = session.baseUri() + "/API/ConnectionComponents/Import";
 
-        StringBuilder sb = new StringBuilder(zipBytes.length * 4 + 32);
-        sb.append("{\"ImportFile\":[");
-        for (int i = 0; i < zipBytes.length; i++) {
-            if (i > 0) {
-                sb.append(',');
-            }
-            sb.append(zipBytes[i] & 0xFF);
-        }
-        sb.append("]}");
-
-        HttpResponse response = post(url, sb.toString().getBytes(StandardCharsets.UTF_8),
-                session.token(), session.ignoreCertificateErrors());
+        HttpResponse response = postImport(url, zipBytes, session.token(), session.ignoreCertificateErrors());
         if (response.status() < 200 || response.status() >= 300) {
             throw new IOException("Import failed (HTTP " + response.status() + "): " + extractError(response.body()));
         }
@@ -108,24 +98,8 @@ public class PvwaClient {
     // ------------------------------------------------------------------------------------------ HTTP IO
 
     private HttpResponse post(String urlString, byte[] body, String authToken, boolean ignoreCertificateErrors) throws Exception {
-        URL url = new URL(urlString);
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        HttpURLConnection connection = openPost(urlString, authToken, ignoreCertificateErrors);
         try {
-            if (ignoreCertificateErrors && connection instanceof HttpsURLConnection https) {
-                https.setSSLSocketFactory(trustAllSocketFactory());
-                https.setHostnameVerifier((hostname, sslSession) -> true);
-            }
-
-            connection.setRequestMethod("POST");
-            connection.setConnectTimeout(30_000);
-            connection.setReadTimeout(120_000);
-            connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("Accept", "application/json");
-            if (authToken != null && !authToken.isBlank()) {
-                connection.setRequestProperty("Authorization", authToken);
-            }
-            connection.setDoOutput(true);
-
             try (OutputStream out = connection.getOutputStream()) {
                 if (body.length > 0) {
                     out.write(body);
@@ -138,6 +112,52 @@ public class PvwaClient {
         } finally {
             connection.disconnect();
         }
+    }
+
+    // Streams the byte-array JSON body directly to the socket so a multi-megabyte package never
+    // materializes as a giant in-memory String/byte[].
+    private HttpResponse postImport(String urlString, byte[] zipBytes, String authToken, boolean ignoreCertificateErrors) throws Exception {
+        HttpURLConnection connection = openPost(urlString, authToken, ignoreCertificateErrors);
+        try {
+            connection.setChunkedStreamingMode(8192);
+            try (OutputStream raw = connection.getOutputStream();
+                 BufferedOutputStream out = new BufferedOutputStream(raw, 8192)) {
+                out.write("{\"ImportFile\":[".getBytes(StandardCharsets.US_ASCII));
+                for (int i = 0; i < zipBytes.length; i++) {
+                    if (i > 0) {
+                        out.write(',');
+                    }
+                    out.write(Integer.toString(zipBytes[i] & 0xFF).getBytes(StandardCharsets.US_ASCII));
+                }
+                out.write("]}".getBytes(StandardCharsets.US_ASCII));
+            }
+
+            int status = connection.getResponseCode();
+            String responseBody = readBody(status < 400 ? connection.getInputStream() : connection.getErrorStream());
+            return new HttpResponse(status, responseBody);
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private HttpURLConnection openPost(String urlString, String authToken, boolean ignoreCertificateErrors) throws Exception {
+        URL url = new URL(urlString);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        if (ignoreCertificateErrors && connection instanceof HttpsURLConnection https) {
+            https.setSSLSocketFactory(trustAllSocketFactory());
+            https.setHostnameVerifier((hostname, sslSession) -> true);
+        }
+
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(30_000);
+        connection.setReadTimeout(120_000);
+        connection.setRequestProperty("Content-Type", "application/json");
+        connection.setRequestProperty("Accept", "application/json");
+        if (authToken != null && !authToken.isBlank()) {
+            connection.setRequestProperty("Authorization", authToken);
+        }
+        connection.setDoOutput(true);
+        return connection;
     }
 
     private static String readBody(InputStream stream) throws IOException {

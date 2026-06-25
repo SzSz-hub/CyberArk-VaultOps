@@ -73,6 +73,7 @@ public class AppSettingsStore {
         settings.setTheme(properties.getProperty("theme", AppSettings.DEFAULT_THEME));
         settings.setDefaultReplacementComponentId(properties.getProperty("defaultReplacementComponent", ""));
         settings.setStorageLocation(properties.getProperty("storageLocation", ""));
+        settings.setOutputRetentionDays(parseInt(properties.getProperty("outputRetentionDays", "0")));
         settings.ensureValidActiveProfile();
 
         if (!Files.exists(settingsPath)) {
@@ -105,6 +106,7 @@ public class AppSettingsStore {
         properties.setProperty("theme", valueOrEmpty(settings.getTheme()));
         properties.setProperty("defaultReplacementComponent", valueOrEmpty(settings.getDefaultReplacementComponentId()));
         properties.setProperty("storageLocation", valueOrEmpty(settings.getStorageLocation()));
+        properties.setProperty("outputRetentionDays", Integer.toString(settings.getOutputRetentionDays()));
 
         writeAtomically(properties);
     }
@@ -210,6 +212,17 @@ public class AppSettingsStore {
 
     private String valueOrEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private static int parseInt(String value) {
+        if (value == null || value.isBlank()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static String describe(Exception e) {

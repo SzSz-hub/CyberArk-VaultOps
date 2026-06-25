@@ -8,16 +8,23 @@ import javafx.animation.KeyFrame;
 import javafx.animation.PauseTransition;
 import javafx.animation.Timeline;
 import javafx.scene.Scene;
+import javafx.scene.Cursor;
+import javafx.scene.Node;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.Line;
+import javafx.scene.shape.Rectangle;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.Dragboard;
 import javafx.scene.input.TransferMode;
@@ -25,6 +32,8 @@ import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
+import javafx.stage.WindowEvent;
 import javafx.util.Duration;
 
 import java.awt.Desktop;
@@ -67,6 +76,8 @@ public class UI {
     private final AppSettings settings;
     private final AppSettingsStore settingsStore;
     private final ThemeManager themeManager;
+    private DiagnosticsLog diagnostics;
+    private OperationAudit operationAudit;
     private final List<ThemeManager.ThemeOption> availableThemes = new ArrayList<>();
     private final List<WeakReference<Scene>> themedScenes = new ArrayList<>();
 
@@ -78,9 +89,12 @@ public class UI {
     private Menu themeMenu;
     private boolean suppressSideNavCallbacks;
     private Stage aboutStage;
+    private List<Image> appIcons = List.of();
 
     private static final Runnable NO_OP = () -> {};
     private static final Duration STATUS_POLL_INTERVAL = Duration.seconds(20);
+    private static final int MAX_DIAGNOSTICS_ENTRIES = 5000;
+    private static final int MAX_OPERATIONS_ENTRIES = 5000;
 
     private static String loadAppVersion() {
         try (java.io.InputStream in = UI.class.getResourceAsStream("/build-info.properties")) {
@@ -162,6 +176,28 @@ public class UI {
 
     void setOnSourceProfileChanged(Runnable onSourceProfileChanged) {
         this.onSourceProfileChanged = safeRunnable(onSourceProfileChanged);
+    }
+
+    void setDiagnosticsLog(DiagnosticsLog diagnostics) {
+        this.diagnostics = diagnostics;
+    }
+
+    private DiagnosticsLog diagnosticsLog() {
+        if (diagnostics == null) {
+            diagnostics = new DiagnosticsLog(AppSettingsStore.userDataDirectory().resolve("diagnostics.log"));
+        }
+        return diagnostics;
+    }
+
+    void setOperationAudit(OperationAudit operationAudit) {
+        this.operationAudit = operationAudit;
+    }
+
+    private OperationAudit operationAuditLog() {
+        if (operationAudit == null) {
+            operationAudit = new OperationAudit(AppSettingsStore.userDataDirectory().resolve("operations.log"));
+        }
+        return operationAudit;
     }
 
     TableView<PVConfigurationParser.PSMServerEntry> getPsmTable() {
@@ -405,7 +441,15 @@ public class UI {
 
     void setupUI(Stage stage) {
         this.primaryStage = stage;
+        stage.initStyle(StageStyle.UNDECORATED);
         refreshAvailableThemes();
+        try {
+            appIcons = AppIcon.createIcons();
+            stage.getIcons().setAll(appIcons);
+        } catch (RuntimeException iconError) {
+            appIcons = List.of();
+            System.err.println("Could not generate application icon: " + iconError.getMessage());
+        }
         root = new BorderPane();
         root.getStyleClass().add("app-body");
         root.setTop(createTopBar());
@@ -436,11 +480,6 @@ public class UI {
         tabPane.getSelectionModel().select(0);
 
         stage.setTitle(APP_NAME + " v" + APP_VERSION);
-        try {
-            stage.getIcons().setAll(AppIcon.createIcons());
-        } catch (RuntimeException iconError) {
-            System.err.println("Could not generate application icon: " + iconError.getMessage());
-        }
         StackPane sceneRoot = new StackPane(root);
         sceneRoot.getStyleClass().add("app-shell");
         toastContainer = new VBox(8);
@@ -451,12 +490,13 @@ public class UI {
         sceneRoot.getChildren().add(toastContainer);
 
         mainScene = new Scene(sceneRoot, 900, 600);
+        stage.setMinWidth(640);
+        stage.setMinHeight(420);
         applyTheme(mainScene);
         stage.setScene(mainScene);
+        installWindowResize(stage, mainScene);
         stage.setOnCloseRequest(event -> {
-            if (activeOperationCheck.getAsBoolean()
-                    && !confirm("Operation in progress",
-                    "A background operation is still running. Close anyway and abandon it?")) {
+            if (!confirmCloseAllowed()) {
                 event.consume();
                 return;
             }
@@ -467,8 +507,300 @@ public class UI {
         startStatusPolling();
     }
 
+    private boolean confirmCloseAllowed() {
+        return !activeOperationCheck.getAsBoolean()
+                || confirm("Operation in progress",
+                "A background operation is still running. Close anyway and abandon it?");
+    }
+
     private VBox createTopBar() {
-        return new VBox(createMenuBar(), createTabPane());
+        return new VBox(createTitleBar(), createMenuBar(), createTabPane());
+    }
+
+    private HBox createTitleBar() {
+        HBox bar = new HBox(8);
+        bar.getStyleClass().add("app-title-bar");
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.setPadding(new Insets(0, 4, 0, 12));
+        bar.setMinHeight(32);
+        bar.setPrefHeight(32);
+
+        if (appIcons != null && !appIcons.isEmpty()) {
+            ImageView iconView = new ImageView(appIcons.get(0));
+            iconView.setFitWidth(16);
+            iconView.setFitHeight(16);
+            iconView.setPreserveRatio(true);
+            bar.getChildren().add(iconView);
+        }
+
+        Label titleLabel = new Label(APP_NAME + "  v" + APP_VERSION);
+        titleLabel.getStyleClass().add("app-title-bar-label");
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button minimizeButton = windowButton(minimizeGlyph(), "window-minimize");
+        minimizeButton.setOnAction(event -> primaryStage.setIconified(true));
+
+        Button maximizeButton = windowButton(
+                primaryStage.isMaximized() ? restoreGlyph() : maximizeGlyph(), "window-maximize");
+        maximizeButton.setOnAction(event -> toggleMaximize());
+        primaryStage.maximizedProperty().addListener((obs, wasMax, isMax) ->
+                maximizeButton.setGraphic(isMax ? restoreGlyph() : maximizeGlyph()));
+
+        Button closeButton = windowButton(closeGlyph(), "window-close");
+        closeButton.setOnAction(event -> requestCloseFromButton());
+
+        HBox windowControls = new HBox(2, minimizeButton, maximizeButton, closeButton);
+        windowControls.setAlignment(Pos.CENTER_RIGHT);
+
+        bar.getChildren().addAll(titleLabel, spacer, windowControls);
+
+        installTitleBarDrag(bar, primaryStage);
+        bar.setOnMouseClicked(event -> {
+            if (event.getButton() == MouseButton.PRIMARY && event.getClickCount() == 2
+                    && !isWindowButton(event.getTarget())) {
+                toggleMaximize();
+            }
+        });
+
+        return bar;
+    }
+
+    private HBox createDialogTitleBar(Stage stage, String title) {
+        HBox bar = new HBox(8);
+        bar.getStyleClass().add("app-title-bar");
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.setPadding(new Insets(0, 4, 0, 12));
+        bar.setMinHeight(32);
+        bar.setPrefHeight(32);
+
+        if (appIcons != null && !appIcons.isEmpty()) {
+            ImageView iconView = new ImageView(appIcons.get(0));
+            iconView.setFitWidth(16);
+            iconView.setFitHeight(16);
+            iconView.setPreserveRatio(true);
+            bar.getChildren().add(iconView);
+        }
+
+        Label titleLabel = new Label(title);
+        titleLabel.getStyleClass().add("app-title-bar-label");
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button closeButton = windowButton(closeGlyph(), "window-close");
+        closeButton.setOnAction(event -> closeStage(stage));
+
+        HBox windowControls = new HBox(2, closeButton);
+        windowControls.setAlignment(Pos.CENTER_RIGHT);
+
+        bar.getChildren().addAll(titleLabel, spacer, windowControls);
+
+        installTitleBarDrag(bar, stage);
+        bar.setOnMouseClicked(event -> {
+            if (event.getButton() == MouseButton.PRIMARY && event.getClickCount() == 2
+                    && stage.isResizable() && !isWindowButton(event.getTarget())) {
+                stage.setMaximized(!stage.isMaximized());
+            }
+        });
+
+        return bar;
+    }
+
+    Scene decorateWindow(Stage stage, String title, Region content, double width, double height) {
+        stage.initStyle(StageStyle.UNDECORATED);
+        VBox.setVgrow(content, Priority.ALWAYS);
+        VBox shell = new VBox(createDialogTitleBar(stage, title), content);
+        shell.getStyleClass().add("app-shell");
+        Scene scene = new Scene(shell, width, height);
+        if (stage.isResizable()) {
+            installWindowResize(stage, scene);
+        }
+        if (appIcons != null && !appIcons.isEmpty()) {
+            stage.getIcons().setAll(appIcons);
+        }
+        return scene;
+    }
+
+    private void installTitleBarDrag(HBox bar, Stage stage) {
+        final double[] dragOffset = new double[2];
+        bar.setOnMousePressed(event -> {
+            if (event.getButton() == MouseButton.PRIMARY) {
+                dragOffset[0] = event.getScreenX() - stage.getX();
+                dragOffset[1] = event.getScreenY() - stage.getY();
+            }
+        });
+        bar.setOnMouseDragged(event -> {
+            if (event.getButton() == MouseButton.PRIMARY && !stage.isMaximized()) {
+                stage.setX(event.getScreenX() - dragOffset[0]);
+                stage.setY(event.getScreenY() - dragOffset[1]);
+            }
+        });
+    }
+
+    private Button windowButton(Node glyph, String... extraClasses) {
+        Button button = new Button();
+        button.getStyleClass().add("window-button");
+        button.getStyleClass().addAll(extraClasses);
+        button.setGraphic(glyph);
+        button.setFocusTraversable(false);
+        button.setPickOnBounds(true);
+        return button;
+    }
+
+    private Node minimizeGlyph() {
+        Line line = new Line(1, 5, 9, 5);
+        line.getStyleClass().add("window-glyph");
+        return glyphBox(line);
+    }
+
+    private Node maximizeGlyph() {
+        Rectangle rect = new Rectangle(1, 1, 8, 8);
+        rect.getStyleClass().add("window-glyph");
+        return glyphBox(rect);
+    }
+
+    private Node restoreGlyph() {
+        Rectangle back = new Rectangle(3, 1, 6, 6);
+        back.getStyleClass().add("window-glyph");
+        Rectangle front = new Rectangle(1, 3, 6, 6);
+        front.getStyleClass().add("window-glyph");
+        return glyphBox(back, front);
+    }
+
+    private Node closeGlyph() {
+        Line one = new Line(1, 1, 9, 9);
+        one.getStyleClass().add("window-glyph");
+        Line two = new Line(1, 9, 9, 1);
+        two.getStyleClass().add("window-glyph");
+        return glyphBox(one, two);
+    }
+
+    private Node glyphBox(Node... shapes) {
+        Pane canvas = new Pane(shapes);
+        canvas.setPrefSize(10, 10);
+        canvas.setMinSize(10, 10);
+        canvas.setMaxSize(10, 10);
+        canvas.setMouseTransparent(true);
+        return new StackPane(canvas);
+    }
+
+    private void closeStage(Stage stage) {
+        WindowEvent closeRequest = new WindowEvent(stage, WindowEvent.WINDOW_CLOSE_REQUEST);
+        stage.fireEvent(closeRequest);
+        if (!closeRequest.isConsumed()) {
+            stage.close();
+        }
+    }
+
+    private boolean isWindowButton(Object target) {
+        if (target instanceof Node node) {
+            for (Node current = node; current != null; current = current.getParent()) {
+                if (current.getStyleClass().contains("window-button")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void toggleMaximize() {
+        primaryStage.setMaximized(!primaryStage.isMaximized());
+    }
+
+    private void requestCloseFromButton() {
+        closeStage(primaryStage);
+    }
+
+    private void installWindowResize(Stage stage, Scene scene) {
+        final int edge = 6;
+        final int[] activeZone = {0};
+        final double[] start = new double[6];
+
+        scene.addEventFilter(MouseEvent.MOUSE_MOVED, event -> {
+            if (stage.isMaximized()) {
+                scene.setCursor(Cursor.DEFAULT);
+                return;
+            }
+            scene.setCursor(cursorForZone(resizeZone(scene, event.getX(), event.getY(), edge)));
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+            if (event.getButton() != MouseButton.PRIMARY || stage.isMaximized()) {
+                activeZone[0] = 0;
+                return;
+            }
+            int zone = resizeZone(scene, event.getX(), event.getY(), edge);
+            activeZone[0] = zone;
+            if (zone != 0) {
+                start[0] = event.getScreenX();
+                start[1] = event.getScreenY();
+                start[2] = stage.getX();
+                start[3] = stage.getY();
+                start[4] = stage.getWidth();
+                start[5] = stage.getHeight();
+                event.consume();
+            }
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_DRAGGED, event -> {
+            int zone = activeZone[0];
+            if (zone == 0) {
+                return;
+            }
+            double dx = event.getScreenX() - start[0];
+            double dy = event.getScreenY() - start[1];
+            double minWidth = Math.max(stage.getMinWidth(), 200);
+            double minHeight = Math.max(stage.getMinHeight(), 150);
+            if ((zone & 4) != 0) {
+                stage.setWidth(Math.max(minWidth, start[4] + dx));
+            }
+            if ((zone & 8) != 0) {
+                double newWidth = Math.max(minWidth, start[4] - dx);
+                stage.setX(start[2] + (start[4] - newWidth));
+                stage.setWidth(newWidth);
+            }
+            if ((zone & 2) != 0) {
+                stage.setHeight(Math.max(minHeight, start[5] + dy));
+            }
+            if ((zone & 1) != 0) {
+                double newHeight = Math.max(minHeight, start[5] - dy);
+                stage.setY(start[3] + (start[5] - newHeight));
+                stage.setHeight(newHeight);
+            }
+            event.consume();
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_RELEASED, event -> activeZone[0] = 0);
+    }
+
+    private int resizeZone(Scene scene, double x, double y, int edge) {
+        int zone = 0;
+        if (y <= edge) {
+            zone |= 1;
+        }
+        if (y >= scene.getHeight() - edge) {
+            zone |= 2;
+        }
+        if (x >= scene.getWidth() - edge) {
+            zone |= 4;
+        }
+        if (x <= edge) {
+            zone |= 8;
+        }
+        return zone;
+    }
+
+    private Cursor cursorForZone(int zone) {
+        return switch (zone) {
+            case 1 -> Cursor.N_RESIZE;
+            case 2 -> Cursor.S_RESIZE;
+            case 4 -> Cursor.E_RESIZE;
+            case 8 -> Cursor.W_RESIZE;
+            case 5 -> Cursor.NE_RESIZE;
+            case 9 -> Cursor.NW_RESIZE;
+            case 6 -> Cursor.SE_RESIZE;
+            case 10 -> Cursor.SW_RESIZE;
+            default -> Cursor.DEFAULT;
+        };
     }
 
     private MenuBar createMenuBar() {
@@ -546,7 +878,11 @@ public class UI {
         Menu helpMenu = new Menu("Help");
         MenuItem aboutItem = new MenuItem("About " + APP_NAME);
         aboutItem.setOnAction(event -> openAboutDialog());
-        helpMenu.getItems().add(aboutItem);
+        MenuItem diagnosticsItem = new MenuItem("View Diagnostics Log...");
+        diagnosticsItem.setOnAction(event -> openDiagnosticsLogViewer());
+        MenuItem operationsItem = new MenuItem("View Operations Log...");
+        operationsItem.setOnAction(event -> openOperationsLogViewer());
+        helpMenu.getItems().addAll(operationsItem, diagnosticsItem, new SeparatorMenuItem(), aboutItem);
 
         menuBar.getMenus().addAll(fileMenu, editMenu, compareMenu, settingsMenu, pvwaMenu, helpMenu);
         return menuBar;
@@ -892,7 +1228,7 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 460, 470);
+        Scene scene = decorateWindow(dialog, "Connect to CyberArk / Idira PVWA", content, 460, 470);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.showAndWait();
@@ -1054,7 +1390,7 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 660, 640);
+        Scene scene = decorateWindow(dialog, "Order Connection Components", content, 660, 640);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.setResizable(true);
@@ -1324,7 +1660,9 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 520, 380);
+        Scene scene = decorateWindow(dialog,
+                skipAllowed ? "Policy has no connection component" : "Policy would have no connection component",
+                content, 520, 380);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.setMinWidth(520);
@@ -1515,7 +1853,7 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 720, 470);
+        Scene scene = decorateWindow(dialog, "Compare Configuration Items", content, 720, 470);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.show();
@@ -1637,7 +1975,7 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 980, 720);
+        Scene scene = decorateWindow(dialog, "Compare \u2014 " + result.title(), content, 980, 720);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.show();
@@ -1772,7 +2110,8 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 900, 640);
+        Scene scene = decorateWindow(dialog,
+                "Orphaned Component References \u2014 " + result.sourceLabel(), content, 900, 640);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.show();
@@ -2133,10 +2472,13 @@ public class UI {
     }
 
     void showToast(String message) {
+        String text = (message == null || message.isBlank()) ? "Action finished." : message;
+        if (diagnostics != null) {
+            diagnostics.info("ui", text);
+        }
         if (toastContainer == null) {
             return;
         }
-        String text = (message == null || message.isBlank()) ? "Action finished." : message;
 
         Label toast = new Label(text);
         toast.getStyleClass().add("toast-message");
@@ -2374,7 +2716,7 @@ public class UI {
         actions.setAlignment(Pos.CENTER_RIGHT);
         dialogRoot.setBottom(actions);
 
-        Scene previewScene = new Scene(dialogRoot, 900, 620);
+        Scene previewScene = decorateWindow(dialog, "Theme Preview", dialogRoot, 900, 620);
         applyTheme(previewScene, initialTheme);
         dialog.setScene(previewScene);
 
@@ -2607,7 +2949,7 @@ public class UI {
         }
         dialog.setOnHidden(event -> aboutStage = null);
 
-        Scene scene = new Scene(buildAboutContent(), 460, 420);
+        Scene scene = decorateWindow(dialog, "About " + APP_NAME, buildAboutContent(), 460, 420);
         applyTheme(scene);
         dialog.setScene(scene);
 
@@ -2730,6 +3072,276 @@ public class UI {
         }
     }
 
+    private void openOperationsLogViewer() {
+        OperationAudit log = operationAuditLog();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.setTitle("Operations Log");
+        if (primaryStage != null) {
+            dialog.getIcons().setAll(primaryStage.getIcons());
+        }
+
+        Label title = new Label("Operations log (audit trail)");
+        title.getStyleClass().add("details-title");
+        Label subtitle = new Label(String.valueOf(log.file()));
+        subtitle.getStyleClass().add("details-source");
+        subtitle.setWrapText(true);
+
+        TextField searchField = new TextField();
+        searchField.setPromptText("Filter operation / details\u2026");
+        HBox.setHgrow(searchField, Priority.ALWAYS);
+
+        ObservableList<OperationAudit.Entry> allRows = FXCollections.observableArrayList();
+        FilteredList<OperationAudit.Entry> filteredRows = new FilteredList<>(allRows, row -> true);
+
+        Label summary = new Label();
+        summary.getStyleClass().add("details-source");
+
+        Runnable applyFilter = () -> {
+            String text = searchField.getText() == null ? "" : searchField.getText().trim().toLowerCase();
+            filteredRows.setPredicate(row -> {
+                if (row == null) {
+                    return false;
+                }
+                if (text.isEmpty()) {
+                    return true;
+                }
+                return contains(row.operation(), text) || contains(row.details(), text) || contains(row.timestamp(), text);
+            });
+            summary.setText(filteredRows.size() + " of " + allRows.size() + " entries shown");
+        };
+
+        Runnable reload = () -> {
+            allRows.setAll(log.readRecent(MAX_OPERATIONS_ENTRIES));
+            applyFilter.run();
+        };
+
+        searchField.textProperty().addListener((obs, oldValue, newValue) -> applyFilter.run());
+
+        javafx.collections.transformation.SortedList<OperationAudit.Entry> sortedRows =
+                new javafx.collections.transformation.SortedList<>(filteredRows);
+
+        TableView<OperationAudit.Entry> table = new TableView<>(sortedRows);
+        sortedRows.comparatorProperty().bind(table.comparatorProperty());
+        table.getStyleClass().add("modern-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        table.setPlaceholder(new Label("No operations recorded yet"));
+        VBox.setVgrow(table, Priority.ALWAYS);
+
+        TableColumn<OperationAudit.Entry, String> timeColumn = new TableColumn<>("Time");
+        timeColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().timestamp()));
+        timeColumn.setMinWidth(150);
+        timeColumn.setPrefWidth(170);
+        timeColumn.setMaxWidth(200);
+
+        TableColumn<OperationAudit.Entry, String> operationColumn = new TableColumn<>("Operation");
+        operationColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().operation()));
+        operationColumn.setMinWidth(150);
+        operationColumn.setPrefWidth(190);
+        operationColumn.setMaxWidth(260);
+
+        TableColumn<OperationAudit.Entry, String> detailsColumn = new TableColumn<>("Details");
+        detailsColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().details()));
+        detailsColumn.setMinWidth(220);
+        detailsColumn.setCellFactory(wrappingCellFactory());
+
+        table.getColumns().add(timeColumn);
+        table.getColumns().add(operationColumn);
+        table.getColumns().add(detailsColumn);
+
+        Button refreshButton = new Button("Refresh");
+        refreshButton.setOnAction(event -> reload.run());
+
+        Button openLocationButton = new Button("Open File Location");
+        openLocationButton.setOnAction(event -> {
+            Path file = log.file();
+            revealFolder(file == null ? null : file.getParent());
+        });
+
+        Region spacer = new Region();
+        HBox topControls = new HBox(12, new Label("Search:"), searchField);
+        topControls.setAlignment(Pos.CENTER_LEFT);
+
+        HBox bottomControls = new HBox(12, summary, spacer, refreshButton, openLocationButton);
+        bottomControls.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Label hint = new Label("An append-only audit trail of online (PVWA logon/import/logoff) and high-risk offline "
+                + "operations (order/import/remove/unlink/populate). Passwords and session tokens are never recorded. "
+                + "Shows the most recent " + MAX_OPERATIONS_ENTRIES + " entries.");
+        hint.getStyleClass().add("details-source");
+        hint.setWrapText(true);
+
+        VBox headerBox = new VBox(2, title, subtitle);
+        headerBox.getStyleClass().add("details-header");
+
+        VBox content = new VBox(10, headerBox, topControls, table, bottomControls, hint);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = decorateWindow(dialog, "Operations Log", content, 920, 640);
+        applyTheme(scene);
+        dialog.setScene(scene);
+
+        reload.run();
+        dialog.show();
+    }
+
+    private void openDiagnosticsLogViewer() {
+        DiagnosticsLog log = diagnosticsLog();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(primaryStage);
+        dialog.setTitle("Diagnostics Log");
+        if (primaryStage != null) {
+            dialog.getIcons().setAll(primaryStage.getIcons());
+        }
+
+        Label title = new Label("Diagnostics log");
+        title.getStyleClass().add("details-title");
+        Label subtitle = new Label(String.valueOf(log.file()));
+        subtitle.getStyleClass().add("details-source");
+        subtitle.setWrapText(true);
+
+        ComboBox<String> levelFilter = new ComboBox<>(FXCollections.observableArrayList(
+                "All levels", "INFO", "WARN", "ERROR"));
+        levelFilter.getSelectionModel().select("All levels");
+
+        TextField searchField = new TextField();
+        searchField.setPromptText("Filter message / category\u2026");
+        HBox.setHgrow(searchField, Priority.ALWAYS);
+
+        ObservableList<DiagnosticsLog.Entry> allRows = FXCollections.observableArrayList();
+        FilteredList<DiagnosticsLog.Entry> filteredRows = new FilteredList<>(allRows, row -> true);
+
+        Label summary = new Label();
+        summary.getStyleClass().add("details-source");
+
+        Runnable applyFilter = () -> {
+            String selectedLevel = levelFilter.getSelectionModel().getSelectedItem();
+            String levelQuery = ("All levels".equals(selectedLevel) || selectedLevel == null) ? "" : selectedLevel;
+            String text = searchField.getText() == null ? "" : searchField.getText().trim().toLowerCase();
+            filteredRows.setPredicate(row -> {
+                if (row == null) {
+                    return false;
+                }
+                if (!levelQuery.isEmpty() && !levelQuery.equalsIgnoreCase(row.level())) {
+                    return false;
+                }
+                if (text.isEmpty()) {
+                    return true;
+                }
+                return contains(row.message(), text) || contains(row.category(), text) || contains(row.timestamp(), text);
+            });
+            summary.setText(filteredRows.size() + " of " + allRows.size() + " entries shown");
+        };
+
+        Runnable reload = () -> {
+            allRows.setAll(log.readRecent(MAX_DIAGNOSTICS_ENTRIES));
+            applyFilter.run();
+        };
+
+        levelFilter.valueProperty().addListener((obs, oldValue, newValue) -> applyFilter.run());
+        searchField.textProperty().addListener((obs, oldValue, newValue) -> applyFilter.run());
+
+        javafx.collections.transformation.SortedList<DiagnosticsLog.Entry> sortedRows =
+                new javafx.collections.transformation.SortedList<>(filteredRows);
+
+        TableView<DiagnosticsLog.Entry> table = new TableView<>(sortedRows);
+        sortedRows.comparatorProperty().bind(table.comparatorProperty());
+        table.getStyleClass().add("modern-table");
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        table.setPlaceholder(new Label("No diagnostics entries"));
+        VBox.setVgrow(table, Priority.ALWAYS);
+
+        TableColumn<DiagnosticsLog.Entry, String> timeColumn = new TableColumn<>("Time");
+        timeColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().timestamp()));
+        timeColumn.setMaxWidth(180);
+
+        TableColumn<DiagnosticsLog.Entry, String> levelColumn = new TableColumn<>("Level");
+        levelColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().level()));
+        levelColumn.setMaxWidth(90);
+
+        TableColumn<DiagnosticsLog.Entry, String> categoryColumn = new TableColumn<>("Category");
+        categoryColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().category()));
+        categoryColumn.setMaxWidth(140);
+
+        TableColumn<DiagnosticsLog.Entry, String> messageColumn = new TableColumn<>("Message");
+        messageColumn.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().message()));
+        messageColumn.setCellFactory(wrappingCellFactory());
+
+        table.getColumns().add(timeColumn);
+        table.getColumns().add(levelColumn);
+        table.getColumns().add(categoryColumn);
+        table.getColumns().add(messageColumn);
+
+        table.setRowFactory(tv -> new TableRow<>() {
+            @Override
+            protected void updateItem(DiagnosticsLog.Entry item, boolean empty) {
+                super.updateItem(item, empty);
+                getStyleClass().removeAll("log-warn", "log-error");
+                if (!empty && item != null) {
+                    if ("ERROR".equalsIgnoreCase(item.level())) {
+                        getStyleClass().add("log-error");
+                    } else if ("WARN".equalsIgnoreCase(item.level())) {
+                        getStyleClass().add("log-warn");
+                    }
+                }
+            }
+        });
+
+        Button refreshButton = new Button("Refresh");
+        refreshButton.setOnAction(event -> reload.run());
+
+        Button openLocationButton = new Button("Open File Location");
+        openLocationButton.setOnAction(event -> {
+            Path file = log.file();
+            revealFolder(file == null ? null : file.getParent());
+        });
+
+        Button clearButton = new Button("Clear Log\u2026");
+        clearButton.setOnAction(event -> {
+            if (confirm("Clear diagnostics log",
+                    "Permanently clear the diagnostics log file? This cannot be undone. "
+                            + "The audit log and any rotated log files are not affected.")) {
+                if (log.clear()) {
+                    showToast("Diagnostics log cleared.");
+                } else {
+                    showToast("Could not clear the diagnostics log.");
+                }
+                reload.run();
+            }
+        });
+
+        Region spacer = new Region();
+        HBox topControls = new HBox(12, new Label("Level:"), levelFilter, searchField);
+        topControls.setAlignment(Pos.CENTER_LEFT);
+
+        HBox bottomControls = new HBox(12, summary, spacer, refreshButton, openLocationButton, clearButton);
+        bottomControls.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Label hint = new Label("A durable, rotating record of warnings, errors and notable activity \u2014 separate from "
+                + "the operations audit log. Shows the most recent " + MAX_DIAGNOSTICS_ENTRIES + " entries.");
+        hint.getStyleClass().add("details-source");
+        hint.setWrapText(true);
+
+        VBox headerBox = new VBox(2, title, subtitle);
+        headerBox.getStyleClass().add("details-header");
+
+        VBox content = new VBox(10, headerBox, topControls, table, bottomControls, hint);
+        content.getStyleClass().add("content-pane");
+        content.setPadding(new Insets(16));
+
+        Scene scene = decorateWindow(dialog, "Diagnostics Log", content, 920, 640);
+        applyTheme(scene);
+        dialog.setScene(scene);
+
+        reload.run();
+        dialog.show();
+    }
+
     private void reloadCurrentTab() {
         if (tabPane == null) {
             return;
@@ -2758,6 +3370,22 @@ public class UI {
             root.setCenter(getTargetsContent());
             onTargetsTabSelected.run();
         }
+    }
+
+    private static void commitRetentionSpinner(Spinner<Integer> spinner) {
+        String text = spinner.getEditor().getText();
+        int value;
+        if (text == null || text.isBlank()) {
+            value = 0;
+        } else {
+            try {
+                value = Integer.parseInt(text.trim());
+            } catch (NumberFormatException e) {
+                value = spinner.getValue() == null ? 0 : spinner.getValue();
+            }
+        }
+        value = Math.max(0, Math.min(AppSettings.MAX_RETENTION_DAYS, value));
+        spinner.getValueFactory().setValue(value);
     }
 
     private void openGeneralSettingsDialog() {
@@ -2804,11 +3432,33 @@ public class UI {
         storageNote.setWrapText(true);
         storageNote.getStyleClass().add("preview-note");
 
+        Spinner<Integer> retentionSpinner = new Spinner<>(0, AppSettings.MAX_RETENTION_DAYS, settings.getOutputRetentionDays());
+        retentionSpinner.setEditable(true);
+        retentionSpinner.setPrefWidth(120);
+        // Restrict typing to digits so the editor can never hold an unparseable value.
+        retentionSpinner.getEditor().setTextFormatter(new TextFormatter<>(change ->
+                change.getControlNewText().matches("\\d{0,5}") ? change : null));
+        // Commit (and clamp) a typed value when focus leaves the editor.
+        retentionSpinner.focusedProperty().addListener((obs, was, isNow) -> {
+            if (!isNow) {
+                commitRetentionSpinner(retentionSpinner);
+            }
+        });
+
+        Label retentionNote = new Label("Automatically delete entries in the 'output' and 'exports' folders older "
+                + "than this many days. The purge runs on startup and after each offline operation. Set to 0 to "
+                + "keep everything (no auto-purge). Source files, settings, themes and logs are never touched.");
+        retentionNote.setWrapText(true);
+        retentionNote.getStyleClass().add("preview-note");
+
         Button saveButton = new Button("Save & Close");
         saveButton.setDefaultButton(true);
         saveButton.setOnAction(event -> {
             settings.setDefaultReplacementComponentId(defaultComponentField.getText());
             settings.setStorageLocation(storageLocationField.getText());
+            commitRetentionSpinner(retentionSpinner);
+            Integer retentionValue = retentionSpinner.getValue();
+            settings.setOutputRetentionDays(retentionValue == null ? 0 : retentionValue);
             settingsStore.save(settings);
             showToast("General settings saved.");
             dialog.close();
@@ -2831,11 +3481,15 @@ public class UI {
                 new Label("Output & exports storage location"),
                 storageRow,
                 storageNote,
+                new Separator(),
+                new Label("Auto-purge output & exports older than (days)"),
+                retentionSpinner,
+                retentionNote,
                 buttons);
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 520, 420);
+        Scene scene = decorateWindow(dialog, "General Settings", content, 520, 560);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.showAndWait();
@@ -3027,7 +3681,7 @@ public class UI {
         BorderPane.setMargin(buttons, new Insets(10, 0, 0, 0));
         listView.setPrefWidth(280);
 
-        Scene dialogScene = new Scene(dialogRoot, 760, 430);
+        Scene dialogScene = decorateWindow(dialog, "Source Settings", dialogRoot, 760, 430);
         applyTheme(dialogScene);
         dialog.setScene(dialogScene);
         dialog.showAndWait();

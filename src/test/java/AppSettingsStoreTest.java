@@ -43,6 +43,7 @@ class AppSettingsStoreTest {
         settings.setActiveProfileId("b");
         settings.setTheme("dark");
         settings.setDefaultReplacementComponentId("PSM-RDP");
+        settings.setOutputRetentionDays(45);
         store.save(settings);
 
         AppSettings reloaded = store.load();
@@ -53,6 +54,19 @@ class AppSettingsStoreTest {
         assertEquals("b", reloaded.getActiveProfileId());
         assertEquals("dark", reloaded.getTheme());
         assertEquals("PSM-RDP", reloaded.getDefaultReplacementComponentId());
+        assertEquals(45, reloaded.getOutputRetentionDays());
+    }
+
+    @Test
+    @DisplayName("A missing or non-numeric retention value loads as 0 (disabled)")
+    void retentionDefaultsToZero(@TempDir Path tmp) throws Exception {
+        Path file = tmp.resolve("app.properties");
+        Files.writeString(file, "theme=dark\noutputRetentionDays=not-a-number\n", StandardCharsets.UTF_8);
+
+        AppSettingsStore store = new AppSettingsStore(file);
+        AppSettings settings = store.load();
+
+        assertEquals(0, settings.getOutputRetentionDays());
     }
 
     @Test

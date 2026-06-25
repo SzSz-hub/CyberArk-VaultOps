@@ -53,6 +53,8 @@ public class AppController {
     private String lastPvwaBaseUri = "https://<pvwa_address>/PasswordVault";
     private final Map<String, EnvironmentLoadState> environmentLoadStates = new HashMap<>();
     private final OperationAudit audit = new OperationAudit(AppSettingsStore.userDataDirectory().resolve("operations.log"));
+    private final DiagnosticsLog diagnostics = new DiagnosticsLog(AppSettingsStore.userDataDirectory().resolve("diagnostics.log"));
+    private final RetentionManager retentionManager = new RetentionManager();
 
     private volatile long loadGeneration;
     private final java.util.concurrent.atomic.AtomicBoolean statusRefreshInFlight = new java.util.concurrent.atomic.AtomicBoolean();
@@ -81,10 +83,35 @@ public class AppController {
         this.ui = ui;
         this.settings = settings;
         this.onLoadError = onLoadError == null ? message -> {} : onLoadError;
-        this.audit.setWarningHandler(this.onLoadError);
+        this.audit.setWarningHandler(message -> {
+            diagnostics.warn("audit", message);
+            this.onLoadError.accept(message);
+        });
+    }
+
+    DiagnosticsLog diagnostics() {
+        return diagnostics;
+    }
+
+    OperationAudit operationAudit() {
+        return audit;
     }
 
     public void shutdown() {
+        diagnostics.info("app", "Shutting down.");
+        PvwaClient.Session session = pvwaSession;
+        if (session != null) {
+            pvwaSession = null;
+            submitBackground(() -> {
+                try {
+                    pvwaClient.logoff(session);
+                    audit.record("pvwa.logoff.shutdown", Map.of("baseUri", session.baseUri()));
+                } catch (Exception error) {
+                    diagnostics.warn("pvwa", "Shutdown logoff failed for " + session.baseUri() + ": " + messageOf(error));
+                    audit.record("pvwa.logoff.shutdown.failed", Map.of("baseUri", session.baseUri()));
+                }
+            });
+        }
         backgroundExecutor.shutdown();
         try {
             if (!backgroundExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -110,16 +137,24 @@ public class AppController {
         boolean submitted = submitBackground(() -> {
             try {
                 T result = work.get();
-                Platform.runLater(() -> onSuccess.accept(result));
+                Platform.runLater(() -> {
+                    try {
+                        onSuccess.accept(result);
+                    } finally {
+                        activeOperations.decrementAndGet();
+                    }
+                });
             } catch (Exception error) {
                 Platform.runLater(() -> {
-                    if (onFailure != null) {
-                        onFailure.run();
+                    try {
+                        if (onFailure != null) {
+                            onFailure.run();
+                        }
+                        reportLoadError(target, error);
+                    } finally {
+                        activeOperations.decrementAndGet();
                     }
-                    reportLoadError(target, error);
                 });
-            } finally {
-                activeOperations.decrementAndGet();
             }
         });
         if (!submitted) {
@@ -161,7 +196,30 @@ public class AppController {
         ui.revealFolder(exportsRoot());
     }
 
+    void purgeOldArtifactsAsync() {
+        int days = settings.getOutputRetentionDays();
+        if (days <= 0) {
+            return;
+        }
+        submitBackground(() -> {
+            java.time.Instant now = java.time.Instant.now();
+            RetentionManager.PurgeResult output = retentionManager.purge(outputRoot(), days, now);
+            RetentionManager.PurgeResult exports = retentionManager.purge(exportsRoot(), days, now);
+            int deleted = output.deleted() + exports.deleted();
+            int failed = output.failed() + exports.failed();
+            if (deleted > 0) {
+                diagnostics.info("retention", "Auto-purged " + deleted + " artifact(s) older than " + days + " day(s).");
+            }
+            if (failed > 0) {
+                String firstError = output.firstError() != null ? output.firstError() : exports.firstError();
+                diagnostics.warn("retention", "Failed to purge " + failed + " artifact(s); first error: " + firstError);
+            }
+        });
+    }
+
     public void loadAll() {
+        diagnostics.info("app", "Application started.");
+        purgeOldArtifactsAsync();
         refreshStatusIndicators();
         ui.refreshCurrentTabContent();
 
@@ -319,7 +377,6 @@ public class AppController {
         boolean policiesRead = false;
         try {
             List<PoliciesParser.PolicyEntry> policies = policiesParser.getPolicies(policiesPath);
-            policiesRead = true;
             for (PoliciesParser.PolicyEntry policy : policies) {
                 String assignedCompStr = policy.assignedComponents();
                 if (assignedCompStr != null && !assignedCompStr.isBlank()) {
@@ -332,8 +389,11 @@ public class AppController {
                     }
                 }
             }
-        } catch (Exception ignored) {
-            // If policies can't be loaded, counts default to 0 and staleness is not tracked.
+            policiesRead = true;
+        } catch (Exception policiesFailure) {
+            // If policies can't be loaded, counts default to null and staleness is not tracked.
+            diagnostics.warn("counts", "Policies.xml unreadable; assignment counts suppressed: "
+                    + messageOf(policiesFailure));
         }
 
         List<PVConfigurationParser.ConnectionComponentEntry> componentsWithCounts = new ArrayList<>();
@@ -511,9 +571,13 @@ public class AppController {
             return;
         }
 
+        final long generation = loadGeneration;
         runAsync("target details",
                 () -> policiesParser.getTargetDetailsForAddress(pvConfigPath, address),
                 details -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     ui.setTargetDetails(details);
                     markFileLoaded(settings.getActiveProfileId(), PV_CONFIGURATION_FILE, Paths.get(pvConfigPath));
                     refreshStatusIndicators();
@@ -536,9 +600,13 @@ public class AppController {
             return;
         }
 
+        final long generation = loadGeneration;
         runAsync("component assignments",
                 () -> policiesParser.getAssignmentsForConnectionComponent(policiesPath, entry.id()),
                 rows -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
                     ui.setConnectionAssignments(rows);
                     markFileLoaded(settings.getActiveProfileId(), POLICIES_FILE, Paths.get(policiesPath));
                     refreshStatusIndicators();
@@ -587,6 +655,7 @@ public class AppController {
                     } else {
                         onLoadError.accept("Exported " + results.size() + " connection components to " + destinationRoot);
                     }
+                    purgeOldArtifactsAsync();
                 },
                 null);
     }
@@ -690,8 +759,9 @@ public class AppController {
                             "output", String.valueOf(result2.outputFolder())));
                     onLoadError.accept("Ordered " + result2.pvReordered() + " definition(s) and "
                             + result2.policiesReordered() + " policy block(s). Output written to " + result2.outputFolder());
+                    purgeOldArtifactsAsync();
                 },
-                null);
+                () -> auditFailure("offline.order.failed", sourceLabel));
     }
 
     public void importPsmComponents() {
@@ -752,8 +822,9 @@ public class AppController {
                         summary += " (skipped " + result.skipped().size() + ")";
                     }
                     onLoadError.accept(summary);
+                    purgeOldArtifactsAsync();
                 },
-                null);
+                () -> auditFailure("offline.import.failed", sourceLabel));
     }
 
     // ------------------------------------------------------------------------------ Online (PVWA REST)
@@ -849,7 +920,7 @@ public class AppController {
                             "failed", String.join(",", summary.failed)));
                     reportOnlineImport(summary);
                 },
-                null);
+                () -> auditFailure("pvwa.import.file.failed", session.baseUri()));
     }
 
     public void importSelectedComponentsOnline(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
@@ -905,7 +976,7 @@ public class AppController {
                             "failed", String.join(",", summary.failed)));
                     reportOnlineImport(summary);
                 },
-                null);
+                () -> auditFailure("pvwa.import.selected.failed", session.baseUri()));
     }
 
     private byte[] readImportPackage(Path zip) throws java.io.IOException {
@@ -948,6 +1019,12 @@ public class AppController {
         return (e == null || e.getMessage() == null || e.getMessage().isBlank())
                 ? (e == null ? "unknown error" : e.getClass().getSimpleName())
                 : e.getMessage();
+    }
+
+    private void auditFailure(String operation, String source) {
+        audit.record(operation, Map.of(
+                "source", source == null ? "" : source,
+                "result", "failed"));
     }
 
     private static final class OnlineImportSummary {
@@ -1040,8 +1117,9 @@ public class AppController {
                     }
                     summary += ". Output written to " + result.outputPolicies().getParent();
                     onLoadError.accept(summary);
+                    purgeOldArtifactsAsync();
                 },
-                null);
+                () -> auditFailure(alsoRemoveDefinitions ? "offline.remove.failed" : "offline.unlink.failed", sourceLabel));
     }
 
     private List<String> collectComponentIds(List<PVConfigurationParser.ConnectionComponentEntry> entries) {
@@ -1072,7 +1150,11 @@ public class AppController {
                 continue;
             }
             FileTime current = readLastModified(filePath);
-            if (current != null && current.compareTo(loaded.sourceModifiedAtLoad) > 0) {
+            boolean timestampChanged = current != null && current.compareTo(loaded.sourceModifiedAtLoad) > 0;
+            long currentSize = readSize(filePath);
+            boolean sizeChanged = loaded.sourceSizeAtLoad >= 0 && currentSize >= 0
+                    && currentSize != loaded.sourceSizeAtLoad;
+            if (timestampChanged || sizeChanged) {
                 onLoadError.accept(fileName + " changed on disk since it was loaded. Use Update Current to reload "
                         + "before running " + operation + ".");
                 return false;
@@ -1160,9 +1242,15 @@ public class AppController {
             return;
         }
 
+        final long generation = loadGeneration;
         runAsync("policy components",
                 () -> policiesParser.getComponentsForPolicy(policiesPath, policy.policyId()),
-                ui::setPolicyAssignments,
+                rows -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
+                    ui.setPolicyAssignments(rows);
+                },
                 () -> ui.setPolicyAssignments(List.of()));
     }
 
@@ -1181,9 +1269,15 @@ public class AppController {
             return;
         }
 
+        final long generation = loadGeneration;
         runAsync("usage policies",
                 () -> policiesParser.getPoliciesForUsage(policiesPath, usage.usageId()),
-                ui::setUsagePolicyAssignments,
+                rows -> {
+                    if (!isCurrentGeneration(generation)) {
+                        return;
+                    }
+                    ui.setUsagePolicyAssignments(rows);
+                },
                 () -> ui.setUsagePolicyAssignments(List.of()));
     }
 
@@ -1236,19 +1330,31 @@ public class AppController {
         if (policyId == null || policyId.isBlank()) {
             return;
         }
+        String policiesPath;
         try {
-            String policiesPath = getActivePoliciesPath();
-            List<PoliciesParser.PolicyEntry> policies = policiesParser.getPolicies(policiesPath);
-            for (PoliciesParser.PolicyEntry policy : policies) {
-                if (policyId.equalsIgnoreCase(policy.policyId())) {
-                    showPolicyDetails(policy);
-                    return;
-                }
-            }
-            onLoadError.accept("Policy details not found for: " + policyId);
+            policiesPath = getActivePoliciesPath();
         } catch (Exception e) {
             reportLoadError("policy details", e);
+            return;
         }
+
+        runAsync("policy details",
+                () -> {
+                    for (PoliciesParser.PolicyEntry policy : policiesParser.getPolicies(policiesPath)) {
+                        if (policyId.equalsIgnoreCase(policy.policyId())) {
+                            return policy;
+                        }
+                    }
+                    return null;
+                },
+                policy -> {
+                    if (policy == null) {
+                        onLoadError.accept("Policy details not found for: " + policyId);
+                        return;
+                    }
+                    showPolicyDetails(policy);
+                },
+                null);
     }
 
     private void showDetailWindow(String key, String windowTitle, String headerText, String detailsContent) {
@@ -1278,8 +1384,7 @@ public class AppController {
         root.setTop(header);
 
         Stage popup = new Stage();
-        popup.setTitle(sourceName + " \u2014 " + windowTitle);
-        Scene scene = new Scene(root, 900, 700);
+        Scene scene = ui.decorateWindow(popup, sourceName + " \u2014 " + windowTitle, root, 900, 700);
         ui.applyTheme(scene);
         popup.setScene(scene);
         popup.setOnHidden(event -> detailWindows.remove(key));
@@ -1363,7 +1468,7 @@ public class AppController {
             }
         }
         List<Compare.Item> items = new ArrayList<>(byId.values());
-        items.sort(Comparator.comparing(item -> item.id() == null ? "" : item.id().toLowerCase()));
+        items.sort(Comparator.comparing(item -> item.id() == null ? "" : item.id().toLowerCase(Locale.ROOT)));
         return items;
     }
 
@@ -1620,7 +1725,7 @@ public class AppController {
                     onLoadError.accept("Removed " + result.totalRemovedAssignments() + " orphaned reference(s). "
                             + "Output written to " + result.outputPolicies().getParent());
                 },
-                null);
+                () -> auditFailure("offline.unlink.orphan.failed", sourceLabel));
     }
 
     private AppSettings.SourceProfile findProfile(String sourceId) {
@@ -1689,8 +1794,9 @@ public class AppController {
                             "output", String.valueOf(result.outputPolicies().getParent())));
                     onLoadError.accept("Populated " + result.emptyPoliciesFixed().size()
                             + " empty policy(ies). Output written to " + result.outputPolicies().getParent());
+                    purgeOldArtifactsAsync();
                 },
-                null);
+                () -> auditFailure("offline.populate.failed", sourceLabel));
     }
 
     private Path folderFor(AppSettings.SourceProfile profile) {
@@ -1727,6 +1833,7 @@ public class AppController {
         String details = (error == null || error.getMessage() == null || error.getMessage().isBlank())
                 ? "Check folder path and file availability."
                 : error.getMessage();
+        diagnostics.error("load", "Cannot load " + target + " from " + profileName, error);
         onLoadError.accept("Cannot load " + target + " from " + profileName + ": " + details);
     }
 
@@ -1826,6 +1933,7 @@ public class AppController {
 
         fileLoadState.loadedAt = LocalDateTime.now();
         fileLoadState.sourceModifiedAtLoad = readLastModified(filePath);
+        fileLoadState.sourceSizeAtLoad = readSize(filePath);
     }
 
     private boolean isCurrentGeneration(long generation) {
@@ -1851,6 +1959,17 @@ public class AppController {
             return Files.getLastModifiedTime(path);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private long readSize(Path path) {
+        if (path == null || !Files.exists(path)) {
+            return -1;
+        }
+        try {
+            return Files.size(path);
+        } catch (Exception ignored) {
+            return -1;
         }
     }
 
@@ -1958,7 +2077,7 @@ public class AppController {
             }
 
             String cellValue = observable.getValue() == null ? "" : observable.getValue().toString();
-            if (!cellValue.toLowerCase().contains(filter.toLowerCase())) {
+            if (!cellValue.toLowerCase(Locale.ROOT).contains(filter.toLowerCase(Locale.ROOT))) {
                 return false;
             }
         }
@@ -2004,10 +2123,12 @@ public class AppController {
     private static class FileLoadState {
         private LocalDateTime loadedAt;
         private FileTime sourceModifiedAtLoad;
+        private long sourceSizeAtLoad = -1;
 
         private void clear() {
             loadedAt = null;
             sourceModifiedAtLoad = null;
+            sourceSizeAtLoad = -1;
         }
     }
 }

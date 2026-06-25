@@ -8,7 +8,10 @@ import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
-import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +20,9 @@ import java.util.Map;
 public class Parser {
     public record XmlNode(String name, Map<String, String> attributes, List<XmlNode> children) {
     }
+
+    private static final long MAX_SOURCE_XML_BYTES = 64L * 1024 * 1024;
+    private static final int MAX_SOURCE_XML_ELEMENTS = 500_000;
 
     protected static DocumentBuilderFactory newSecureDocumentBuilderFactory() throws ParserConfigurationException {
         return newSecureDocumentBuilderFactory(true);
@@ -43,10 +49,35 @@ public class Parser {
     }
 
     protected static Document loadSecureDocument(String xmlPath) throws Exception {
+        Path path = Paths.get(xmlPath);
+        long size = Files.size(path);
+        if (size <= 0 || size > MAX_SOURCE_XML_BYTES) {
+            throw new IOException("XML file size " + size + " bytes is outside the supported range (1.."
+                    + MAX_SOURCE_XML_BYTES + " bytes): " + path.getFileName());
+        }
         DocumentBuilder db = newSecureDocumentBuilderFactory().newDocumentBuilder();
-        Document doc = db.parse(new File(xmlPath));
+        Document doc = db.parse(path.toFile());
+        enforceElementBudget(doc, path);
         doc.getDocumentElement().normalize();
         return doc;
+    }
+
+    private static void enforceElementBudget(Document doc, Path path) throws IOException {
+        int elements = doc.getElementsByTagName("*").getLength();
+        if (elements > MAX_SOURCE_XML_ELEMENTS) {
+            throw new IOException("XML document has " + elements + " elements, exceeding the supported maximum of "
+                    + MAX_SOURCE_XML_ELEMENTS + ": " + path.getFileName());
+        }
+    }
+
+    static Element requireRoot(Document doc, String expectedRootName) {
+        Element root = doc == null ? null : doc.getDocumentElement();
+        if (root == null || !expectedRootName.equals(root.getTagName())) {
+            String actual = root == null ? "(none)" : root.getTagName();
+            throw new IllegalStateException("Unexpected XML root: expected <" + expectedRootName
+                    + "> but found <" + actual + ">.");
+        }
+        return root;
     }
 
     static String attr(Element element, String attrName) {

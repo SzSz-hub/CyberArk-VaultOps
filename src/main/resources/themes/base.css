@@ -67,6 +67,58 @@
     -fx-background-color: -app-hover;
 }
 
+.app-title-bar {
+    -fx-background-color: derive(-app-bg, -9%);
+    -fx-border-color: -app-border;
+    -fx-border-width: 0 0 1.5 0;
+}
+
+.app-title-bar-label {
+    -fx-text-fill: -app-text;
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+.app-title-bar .window-button {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-background-radius: 4px;
+    -fx-border-color: transparent;
+    -fx-border-width: 0;
+    -fx-padding: 0;
+    -fx-min-width: 34px;
+    -fx-max-width: 34px;
+    -fx-min-height: 26px;
+    -fx-pref-height: 26px;
+    -fx-max-height: 26px;
+    -fx-cursor: hand;
+}
+
+.app-title-bar .window-button:hover,
+.app-title-bar .window-button:pressed {
+    -fx-background-color: -app-hover;
+}
+
+.app-title-bar .window-close:hover,
+.app-title-bar .window-close:pressed {
+    -fx-background-color: #e81123;
+}
+
+.window-glyph {
+    -fx-stroke: -app-subtle-text;
+    -fx-stroke-width: 1.1;
+    -fx-stroke-line-cap: round;
+    -fx-fill: transparent;
+}
+
+.app-title-bar .window-button:hover .window-glyph {
+    -fx-stroke: -app-text;
+}
+
+.app-title-bar .window-close:hover .window-glyph {
+    -fx-stroke: #ffffff;
+}
+
 .main-tab-pane {
     -fx-padding: 0 10 0 10;
 }
@@ -318,6 +370,29 @@
     -fx-text-fill: -app-compare-text;
 }
 
+/* Diagnostics log rows reuse the compare diff palette so warnings (amber) and errors (red)
+   stay readable across every theme without each theme needing extra variables. */
+.table-row-cell.log-warn {
+    -fx-background-color: -app-compare-diff;
+}
+
+.table-row-cell.log-error {
+    -fx-background-color: -app-compare-only-b;
+}
+
+.table-row-cell.log-warn:selected {
+    -fx-background-color: -app-compare-diff-selected;
+}
+
+.table-row-cell.log-error:selected {
+    -fx-background-color: -app-compare-only-b-selected;
+}
+
+.table-row-cell.log-warn .table-cell,
+.table-row-cell.log-error .table-cell {
+    -fx-text-fill: -app-compare-text;
+}
+
 /* Combo box / dropdown */
 .combo-box .arrow-button {
     -fx-background-color: transparent;
@@ -362,6 +437,57 @@
 .combo-box-popup .list-view .list-cell:filled:selected {
     -fx-background-color: -app-selection;
     -fx-text-fill: -app-text;
+}
+
+/* Spinner (numeric stepper, e.g. retention days in General Settings). The editor is a
+   .text-field; the increment/decrement arrow buttons are themed to match the combo-box arrow. */
+.spinner {
+    -fx-background-color: -app-surface;
+    -fx-border-color: -app-border;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+}
+
+.spinner:focused {
+    -fx-border-color: -app-accent;
+}
+
+.spinner .text-field {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-radius: 10 0 0 10;
+    -fx-border-radius: 10 0 0 10;
+}
+
+.spinner .increment-arrow-button,
+.spinner .decrement-arrow-button {
+    -fx-background-color: transparent;
+    -fx-padding: 4 8 4 8;
+}
+
+.spinner .increment-arrow-button {
+    -fx-background-radius: 0 9 0 0;
+}
+
+.spinner .decrement-arrow-button {
+    -fx-background-radius: 0 0 9 0;
+}
+
+.spinner .increment-arrow-button:hover,
+.spinner .decrement-arrow-button:hover {
+    -fx-background-color: -app-hover;
+}
+
+.spinner .increment-arrow,
+.spinner .decrement-arrow {
+    -fx-background-color: -app-subtle-text;
+}
+
+.spinner:hover .increment-arrow,
+.spinner:hover .decrement-arrow,
+.spinner .increment-arrow-button:hover .increment-arrow,
+.spinner .decrement-arrow-button:hover .decrement-arrow {
+    -fx-background-color: -app-accent;
 }
 
 /* Check box / radio button */

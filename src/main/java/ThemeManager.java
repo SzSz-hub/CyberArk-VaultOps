@@ -119,6 +119,7 @@ public final class ThemeManager {
                     .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".css"))
                     .filter(path -> !BASE_THEME_FILE.equalsIgnoreCase(path.getFileName().toString()))
                     .filter(path -> !EXAMPLE_THEME_FILE.equalsIgnoreCase(path.getFileName().toString()))
+                    .filter(this::isSafeExternalTheme)
                     .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)))
                     .forEach(path -> {
                         String fileName = path.getFileName().toString();
@@ -129,6 +130,22 @@ public final class ThemeManager {
                         themes.put(id, new ThemeOption(id, toDisplayName(stripExtension(fileName)), path.toUri().toString(), packagedBaseUri, true));
                     });
         } catch (IOException ignored) {
+        }
+    }
+
+    private boolean isSafeExternalTheme(Path css) {
+        try {
+            String content = Files.readString(css, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+            return !content.contains("url(http:")
+                    && !content.contains("url('http:")
+                    && !content.contains("url(\"http:")
+                    && !content.contains("url(https:")
+                    && !content.contains("url('https:")
+                    && !content.contains("url(\"https:")
+                    && !content.contains("url(file:")
+                    && !content.contains("@import");
+        } catch (IOException unreadable) {
+            return false;
         }
     }
 

@@ -15,6 +15,8 @@ public class Main extends Application {
         settingsStore.setErrorHandler(ui::showToast);
 
         AppController controller = new AppController(ui, settings, ui::showToast);
+        ui.setDiagnosticsLog(controller.diagnostics());
+        ui.setOperationAudit(controller.operationAudit());
         ui.setOnPsmpTabSelected(controller::loadPSMPServersIfNeeded);
         ui.setOnPsmTabSelected(controller::loadPSMServersIfNeeded);
         ui.setOnConnectionComponentTabSelected(controller::loadConnectionComponentIfNeeded);
