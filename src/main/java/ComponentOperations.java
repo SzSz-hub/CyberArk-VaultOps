@@ -1069,7 +1069,7 @@ public class ComponentOperations {
 
     private String serializeElement(Element element) throws Exception {
         Transformer transformer = newSecureTransformer();
-        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
         StringWriter writer = new StringWriter();
         transformer.transform(new DOMSource(element), new StreamResult(writer));
         return spaceBeforeSelfClosingTags(writer.toString());
