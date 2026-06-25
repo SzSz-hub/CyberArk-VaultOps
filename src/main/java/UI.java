@@ -1364,13 +1364,19 @@ public class UI {
                             java.util.function.Supplier<Compare.Kind> kindSupplier) {
             sourceBox.setItems(FXCollections.observableArrayList(profiles));
             sourceBox.setConverter(profileConverter());
+            sourceBox.setMinWidth(0);
+            sourceBox.setPrefWidth(0);
             sourceBox.setMaxWidth(Double.MAX_VALUE);
             sourceBox.setVisibleRowCount(15);
 
             itemFilter.setPromptText("Type to filter items\u2026");
+            itemFilter.setMinWidth(0);
+            itemFilter.setPrefWidth(0);
             itemFilter.setMaxWidth(Double.MAX_VALUE);
 
             itemBox.setItems(filteredItems);
+            itemBox.setMinWidth(0);
+            itemBox.setPrefWidth(0);
             itemBox.setMaxWidth(Double.MAX_VALUE);
             itemBox.setVisibleRowCount(15);
 
@@ -1388,6 +1394,9 @@ public class UI {
 
             status.getStyleClass().add("preview-note");
             status.setWrapText(true);
+            status.setMinWidth(0);
+            status.setPrefWidth(0);
+            status.setMaxWidth(Double.MAX_VALUE);
 
             Label title = new Label("Side " + tag);
             title.getStyleClass().add("about-section-label");
@@ -1395,6 +1404,8 @@ public class UI {
             node = new VBox(6, title, new Label("Source"), sourceBox,
                     new Label("Item"), itemFilter, itemBox, status);
             node.getStyleClass().add("about-support");
+            node.setMinWidth(0);
+            node.setMaxWidth(Double.MAX_VALUE);
 
             if (!profiles.isEmpty()) {
                 sourceBox.getSelectionModel().select(0);
@@ -1475,6 +1486,9 @@ public class UI {
         sideB.reload(kindBox.getValue());
 
         HBox sides = new HBox(12, sideA.node, sideB.node);
+        javafx.beans.binding.DoubleBinding halfWidth = sides.widthProperty().subtract(12).divide(2);
+        sideA.node.prefWidthProperty().bind(halfWidth);
+        sideB.node.prefWidthProperty().bind(halfWidth);
         HBox.setHgrow(sideA.node, Priority.ALWAYS);
         HBox.setHgrow(sideB.node, Priority.ALWAYS);
 
