@@ -107,6 +107,7 @@ public class UI {
     private Runnable onReloadAllRequested = NO_OP;
     private Runnable onStatusRefreshRequested = NO_OP;
     private Runnable onAppClose = NO_OP;
+    private java.util.function.BooleanSupplier activeOperationCheck = () -> false;
     private Runnable onOrderComponents = NO_OP;
     private Runnable onImportPsmComponent = NO_OP;
     private Runnable onFindOrphanComponents = NO_OP;
@@ -117,6 +118,8 @@ public class UI {
     private Runnable onPvwaConnect = NO_OP;
     private Runnable onPvwaDisconnect = NO_OP;
     private Runnable onImportFromFileOnline = NO_OP;
+    private Runnable onOpenOutputFolder = NO_OP;
+    private Runnable onOpenExportsFolder = NO_OP;
 
     private static Runnable safeRunnable(Runnable runnable) {
         return runnable == null ? NO_OP : runnable;
@@ -326,6 +329,10 @@ public class UI {
         this.onAppClose = safeRunnable(onAppClose);
     }
 
+    void setActiveOperationCheck(java.util.function.BooleanSupplier activeOperationCheck) {
+        this.activeOperationCheck = activeOperationCheck == null ? () -> false : activeOperationCheck;
+    }
+
     void setOnOrderComponents(Runnable onOrderComponents) {
         this.onOrderComponents = safeRunnable(onOrderComponents);
     }
@@ -336,6 +343,14 @@ public class UI {
 
     void setOnPopulateEmptyPolicies(Runnable onPopulateEmptyPolicies) {
         this.onPopulateEmptyPolicies = safeRunnable(onPopulateEmptyPolicies);
+    }
+
+    void setOnOpenOutputFolder(Runnable onOpenOutputFolder) {
+        this.onOpenOutputFolder = safeRunnable(onOpenOutputFolder);
+    }
+
+    void setOnOpenExportsFolder(Runnable onOpenExportsFolder) {
+        this.onOpenExportsFolder = safeRunnable(onOpenExportsFolder);
     }
 
     void setOnOrphanRemoveReference(Consumer<PoliciesParser.ComponentAssignmentEntry> handler) {
@@ -438,6 +453,12 @@ public class UI {
         applyTheme(mainScene);
         stage.setScene(mainScene);
         stage.setOnCloseRequest(event -> {
+            if (activeOperationCheck.getAsBoolean()
+                    && !confirm("Operation in progress",
+                    "A background operation is still running. Close anyway and abandon it?")) {
+                event.consume();
+                return;
+            }
             stopStatusPolling();
             onAppClose.run();
         });
@@ -458,9 +479,16 @@ public class UI {
         importComponentsItem.setOnAction(event -> onImportPsmComponent.run());
         MenuItem exportComponentsItem = new MenuItem("Export Selected Components...");
         exportComponentsItem.setOnAction(event -> exportSelectedComponentsFromMenu());
+        MenuItem openOutputFolderItem = new MenuItem("Open Output Folder");
+        openOutputFolderItem.setOnAction(event -> onOpenOutputFolder.run());
+        MenuItem openExportsFolderItem = new MenuItem("Open Exports Folder");
+        openExportsFolderItem.setOnAction(event -> onOpenExportsFolder.run());
         fileMenu.getItems().addAll(
                 importComponentsItem,
-                exportComponentsItem
+                exportComponentsItem,
+                new SeparatorMenuItem(),
+                openOutputFolderItem,
+                openExportsFolderItem
         );
 
         Menu editMenu = new Menu("Edit");
@@ -744,13 +772,21 @@ public class UI {
         return chooser.showDialog(primaryStage);
     }
 
+    private Path exportsBaseDirectory() {
+        String configured = settings.getStorageLocation();
+        Path base = (configured == null || configured.isBlank())
+                ? Paths.get("").toAbsolutePath().normalize()
+                : Paths.get(configured.trim()).toAbsolutePath().normalize();
+        return base.resolve("exports");
+    }
+
     List<File> chooseImportFiles() {
         FileChooser chooser = new FileChooser();
         chooser.setTitle("Select PSM connection component package(s)");
         chooser.getExtensionFilters().addAll(
                 new FileChooser.ExtensionFilter("Connection component packages (*.zip)", "*.zip"),
                 new FileChooser.ExtensionFilter("All files", "*.*"));
-        File defaultDir = Paths.get("exports").toFile();
+        File defaultDir = exportsBaseDirectory().toFile();
         if (defaultDir.isDirectory()) {
             chooser.setInitialDirectory(defaultDir);
         }
@@ -2726,10 +2762,35 @@ public class UI {
         defaultNote.setWrapText(true);
         defaultNote.getStyleClass().add("preview-note");
 
+        TextField storageLocationField = new TextField();
+        storageLocationField.setPromptText("Leave blank to use folders next to the app");
+        storageLocationField.setText(settings.getStorageLocation());
+        HBox.setHgrow(storageLocationField, Priority.ALWAYS);
+        Button storageBrowseButton = new Button("Browse...");
+        storageBrowseButton.setOnAction(event -> {
+            DirectoryChooser chooser = new DirectoryChooser();
+            File initial = existingDirectory(storageLocationField.getText());
+            if (initial != null) {
+                chooser.setInitialDirectory(initial);
+            }
+            File selected = chooser.showDialog(dialog);
+            if (selected != null) {
+                storageLocationField.setText(selected.getPath());
+            }
+        });
+        HBox storageRow = new HBox(8, storageLocationField, storageBrowseButton);
+
+        Label storageNote = new Label("Base location for the generated 'output' (offline edits) and 'exports' "
+                + "folders. Pick a shared team folder if you want colleagues to find the results; leave blank "
+                + "to store them next to the app. Settings, themes and the audit log are unaffected.");
+        storageNote.setWrapText(true);
+        storageNote.getStyleClass().add("preview-note");
+
         Button saveButton = new Button("Save & Close");
         saveButton.setDefaultButton(true);
         saveButton.setOnAction(event -> {
             settings.setDefaultReplacementComponentId(defaultComponentField.getText());
+            settings.setStorageLocation(storageLocationField.getText());
             settingsStore.save(settings);
             showToast("General settings saved.");
             dialog.close();
@@ -2748,11 +2809,15 @@ public class UI {
                 new Label("Default replacement connection component"),
                 defaultComponentField,
                 defaultNote,
+                new Separator(),
+                new Label("Output & exports storage location"),
+                storageRow,
+                storageNote,
                 buttons);
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 460, 260);
+        Scene scene = new Scene(content, 520, 420);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.showAndWait();

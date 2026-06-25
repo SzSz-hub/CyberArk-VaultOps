@@ -17,6 +17,8 @@ public class PvwaClient {
 
     private static volatile SSLSocketFactory trustAllSocketFactory;
 
+    private static final int MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
     public record Credentials(
             String baseUri,
             String authType,
@@ -39,8 +41,7 @@ public class PvwaClient {
             throw new IllegalArgumentException("PVWA credentials are required.");
         }
         String base = normalizeBase(credentials.baseUri());
-        String type = (credentials.authType() == null || credentials.authType().isBlank())
-                ? "CyberArk" : credentials.authType().trim();
+        String type = normalizeAuthType(credentials.authType());
         String url = base + "/api/Auth/" + type + "/Logon";
 
         String body = "{"
@@ -98,7 +99,10 @@ public class PvwaClient {
             return;
         }
         String url = session.baseUri() + "/API/Auth/Logoff";
-        post(url, new byte[0], session.token(), session.ignoreCertificateErrors());
+        HttpResponse response = post(url, new byte[0], session.token(), session.ignoreCertificateErrors());
+        if (response.status() < 200 || response.status() >= 300) {
+            throw new IOException("Logoff failed (HTTP " + response.status() + "): " + extractError(response.body()));
+        }
     }
 
     // ------------------------------------------------------------------------------------------ HTTP IO
@@ -144,7 +148,12 @@ public class PvwaClient {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[4096];
             int read;
+            int total = 0;
             while ((read = in.read(chunk)) != -1) {
+                total += read;
+                if (total > MAX_RESPONSE_BYTES) {
+                    throw new IOException("PVWA response exceeded the " + MAX_RESPONSE_BYTES + "-byte limit.");
+                }
                 buffer.write(chunk, 0, read);
             }
             return buffer.toString(StandardCharsets.UTF_8);
@@ -198,6 +207,14 @@ public class PvwaClient {
             value = value.substring(0, value.length() - 1);
         }
         return value;
+    }
+
+    private static String normalizeAuthType(String authType) {
+        String type = (authType == null || authType.isBlank()) ? "CyberArk" : authType.trim();
+        if (!type.matches("[A-Za-z][A-Za-z0-9_-]{0,31}")) {
+            throw new IllegalArgumentException("Unsupported PVWA authentication type: " + type);
+        }
+        return type;
     }
 
     private static String unwrapToken(String body) {

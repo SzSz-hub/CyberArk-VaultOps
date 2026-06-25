@@ -162,7 +162,7 @@
                                         <argument>--name</argument>
                                         <argument>CyberArk VaultOps</argument>
                                         <argument>--app-version</argument>
-                                        <argument>1.0</argument>
+                                        <argument>${project.version}</argument>
                                         <argument>--vendor</argument>
                                         <argument>CyberArk VaultOps</argument>
                                         <argument>--input</argument>

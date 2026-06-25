@@ -39,6 +39,7 @@ public class AppController {
 
     private static final String PV_CONFIGURATION_FILE = "PVConfiguration.xml";
     private static final String POLICIES_FILE = "Policies.xml";
+    private static final long MAX_ONLINE_IMPORT_BYTES = 16L * 1024 * 1024;
     private static final DateTimeFormatter LOAD_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final UI ui;
@@ -55,6 +56,7 @@ public class AppController {
 
     private volatile long loadGeneration;
     private final java.util.concurrent.atomic.AtomicBoolean statusRefreshInFlight = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicInteger activeOperations = new java.util.concurrent.atomic.AtomicInteger();
 
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "VaultOps-loader");
@@ -64,7 +66,9 @@ public class AppController {
 
     private final Map<TableView<?>, FilterBinding> filterBindings = new IdentityHashMap<>();
 
-    private final Map<String, Stage> detailWindows = new HashMap<>();
+    private static final int MAX_DETAIL_WINDOWS = 12;
+
+    private final Map<String, Stage> detailWindows = new LinkedHashMap<>(16, 0.75f, true);
 
     private boolean connectionComponentLoaded;
     private boolean psmpLoaded;
@@ -77,10 +81,23 @@ public class AppController {
         this.ui = ui;
         this.settings = settings;
         this.onLoadError = onLoadError == null ? message -> {} : onLoadError;
+        this.audit.setWarningHandler(this.onLoadError);
     }
 
     public void shutdown() {
-        backgroundExecutor.shutdownNow();
+        backgroundExecutor.shutdown();
+        try {
+            if (!backgroundExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                backgroundExecutor.shutdownNow();
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            backgroundExecutor.shutdownNow();
+        }
+    }
+
+    public boolean hasActiveOperations() {
+        return activeOperations.get() > 0;
     }
 
     @FunctionalInterface
@@ -89,7 +106,8 @@ public class AppController {
     }
 
     private <T> void runAsync(String target, ThrowingSupplier<T> work, Consumer<T> onSuccess, Runnable onFailure) {
-        submitBackground(() -> {
+        activeOperations.incrementAndGet();
+        boolean submitted = submitBackground(() -> {
             try {
                 T result = work.get();
                 Platform.runLater(() -> onSuccess.accept(result));
@@ -100,23 +118,47 @@ public class AppController {
                     }
                     reportLoadError(target, error);
                 });
+            } finally {
+                activeOperations.decrementAndGet();
             }
         });
-    }
-
-    private void submitBackground(Runnable task) {
-        try {
-            backgroundExecutor.submit(task);
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            // Executor already shutting down; nothing to do.
+        if (!submitted) {
+            activeOperations.decrementAndGet();
         }
     }
 
-    // Offline edits are written to an "output" folder next to the running app (the working directory), in a
-    // <timestamp>_<source>/ subfolder, ready to re-import into CyberArk / Idira. Source files are never touched.
-    // After writing, the controller opens the folder via UI.revealFolder so the result is easy to find.
-    private static Path outputRoot() {
-        return Paths.get("output").toAbsolutePath().normalize();
+    private boolean submitBackground(Runnable task) {
+        try {
+            backgroundExecutor.submit(task);
+            return true;
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor already shutting down; nothing to do.
+            return false;
+        }
+    }
+
+    private Path baseStorageRoot() {
+        String configured = settings.getStorageLocation();
+        if (configured != null && !configured.isBlank()) {
+            return Paths.get(configured.trim()).toAbsolutePath().normalize();
+        }
+        return Paths.get("").toAbsolutePath().normalize();
+    }
+
+    Path outputRoot() {
+        return baseStorageRoot().resolve("output");
+    }
+
+    Path exportsRoot() {
+        return baseStorageRoot().resolve("exports");
+    }
+
+    public void openOutputFolder() {
+        ui.revealFolder(outputRoot());
+    }
+
+    public void openExportsFolder() {
+        ui.revealFolder(exportsRoot());
     }
 
     public void loadAll() {
@@ -198,14 +240,20 @@ public class AppController {
         if (!statusRefreshInFlight.compareAndSet(false, true)) {
             return;
         }
+        final String profileId = profile.id();
+        final long generation = loadGeneration;
         submitBackground(() -> {
             try {
                 boolean pvStale = isStale(pvLoadedAt, pvModifiedAtLoad, readLastModified(pvPath));
                 boolean policiesStale = isStale(policiesLoadedAt, policiesModifiedAtLoad, readLastModified(policiesPath));
                 String pvLabel = formatLoadStatusLabel(PV_CONFIGURATION_FILE, pvLoadedAt, pvStale);
                 String policiesLabel = formatLoadStatusLabel(POLICIES_FILE, policiesLoadedAt, policiesStale);
-                Platform.runLater(() ->
-                        ui.setLoadStatus(sourceName, pvLabel, pvStale, policiesLabel, policiesStale));
+                Platform.runLater(() -> {
+                    if (generation != loadGeneration || !profileId.equals(settings.getActiveProfileId())) {
+                        return;
+                    }
+                    ui.setLoadStatus(sourceName, pvLabel, pvStale, policiesLabel, policiesStale);
+                });
             } finally {
                 statusRefreshInFlight.set(false);
             }
@@ -515,18 +563,7 @@ public class AppController {
             return;
         }
 
-        Path defaultRoot = Paths.get("exports").toAbsolutePath().normalize();
-        try {
-            Files.createDirectories(defaultRoot);
-        } catch (Exception ignored) {
-            // The exports folder is only a suggested starting point for the chooser.
-        }
-
-        File chosen = ui.chooseDirectory("Choose export destination folder", defaultRoot.toFile());
-        if (chosen == null) {
-            return; // User cancelled the chooser.
-        }
-        Path destinationRoot = chosen.toPath();
+        Path destinationRoot = exportsRoot();
 
         List<String> ids = new ArrayList<>();
         for (PVConfigurationParser.ConnectionComponentEntry entry : entries) {
@@ -537,6 +574,7 @@ public class AppController {
 
         runAsync("connection component export",
                 () -> {
+                    Files.createDirectories(destinationRoot);
                     List<ComponentOperations.ExportResult> results = new ArrayList<>();
                     for (String id : ids) {
                         results.add(componentOperations.exportConnectionComponent(pvConfigPath, id, destinationRoot));
@@ -652,7 +690,6 @@ public class AppController {
                             "output", String.valueOf(result2.outputFolder())));
                     onLoadError.accept("Ordered " + result2.pvReordered() + " definition(s) and "
                             + result2.policiesReordered() + " policy block(s). Output written to " + result2.outputFolder());
-                    ui.revealFolder(result2.outputFolder());
                 },
                 null);
     }
@@ -715,7 +752,6 @@ public class AppController {
                         summary += " (skipped " + result.skipped().size() + ")";
                     }
                     onLoadError.accept(summary);
-                    ui.revealFolder(result.outputFolder());
                 },
                 null);
     }
@@ -797,7 +833,7 @@ public class AppController {
                     for (Path zip : zips) {
                         String label = zip.getFileName() == null ? zip.toString() : zip.getFileName().toString();
                         try {
-                            byte[] bytes = Files.readAllBytes(zip);
+                            byte[] bytes = readImportPackage(zip);
                             pvwaClient.importConnectionComponent(session, bytes);
                             summary.succeeded.add(label);
                         } catch (Exception e) {
@@ -870,6 +906,21 @@ public class AppController {
                     reportOnlineImport(summary);
                 },
                 null);
+    }
+
+    private byte[] readImportPackage(Path zip) throws java.io.IOException {
+        if (zip == null || !Files.isRegularFile(zip)) {
+            throw new java.io.IOException("Import package is not a file.");
+        }
+        long size = Files.size(zip);
+        if (size <= 0 || size > MAX_ONLINE_IMPORT_BYTES) {
+            throw new java.io.IOException("Import package must be between 1 byte and " + MAX_ONLINE_IMPORT_BYTES + " bytes.");
+        }
+        String name = zip.getFileName() == null ? "" : zip.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".zip")) {
+            throw new java.io.IOException("Import package must be a .zip file.");
+        }
+        return Files.readAllBytes(zip);
     }
 
     private boolean requirePvwaSession() {
@@ -989,7 +1040,6 @@ public class AppController {
                     }
                     summary += ". Output written to " + result.outputPolicies().getParent();
                     onLoadError.accept(summary);
-                    ui.revealFolder(result.outputPolicies().getParent());
                 },
                 null);
     }
@@ -1046,7 +1096,7 @@ public class AppController {
             }
         });
         try {
-            return future.get();
+            return future.get(5, java.util.concurrent.TimeUnit.MINUTES);
         } catch (Exception error) {
             return ComponentOperations.EmptyPolicyChoice.cancel();
         }
@@ -1235,7 +1285,22 @@ public class AppController {
         popup.setOnHidden(event -> detailWindows.remove(key));
 
         detailWindows.put(key, popup);
+        evictExcessDetailWindows();
         popup.show();
+    }
+
+    private void evictExcessDetailWindows() {
+        while (detailWindows.size() > MAX_DETAIL_WINDOWS) {
+            java.util.Iterator<Map.Entry<String, Stage>> iterator = detailWindows.entrySet().iterator();
+            if (!iterator.hasNext()) {
+                return;
+            }
+            Stage oldest = iterator.next().getValue();
+            iterator.remove();
+            if (oldest != null) {
+                oldest.close();
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------------------- compare
@@ -1554,7 +1619,6 @@ public class AppController {
 
                     onLoadError.accept("Removed " + result.totalRemovedAssignments() + " orphaned reference(s). "
                             + "Output written to " + result.outputPolicies().getParent());
-                    ui.revealFolder(result.outputPolicies().getParent());
                 },
                 null);
     }
@@ -1625,7 +1689,6 @@ public class AppController {
                             "output", String.valueOf(result.outputPolicies().getParent())));
                     onLoadError.accept("Populated " + result.emptyPoliciesFixed().size()
                             + " empty policy(ies). Output written to " + result.outputPolicies().getParent());
-                    ui.revealFolder(result.outputPolicies().getParent());
                 },
                 null);
     }

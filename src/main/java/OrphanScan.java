@@ -12,4 +12,3 @@ public final class OrphanScan {
     private OrphanScan() {
     }
 }
-
