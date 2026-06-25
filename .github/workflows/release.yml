@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -78,6 +80,13 @@ jobs:
             CyberArkVaultOps-*.zip.sha256
             CyberArkVaultOps-*.tar.gz
             CyberArkVaultOps-*.tar.gz.sha256
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            CyberArkVaultOps-*.zip
+            CyberArkVaultOps-*.tar.gz
 
   release:
     name: Publish release
