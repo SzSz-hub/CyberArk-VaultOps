@@ -483,7 +483,9 @@ public class PoliciesParser extends Parser {
     }
 
     private Document loadDocument(String xmlPath) throws Exception {
-        return loadSecureDocument(xmlPath);
+        Document doc = loadSecureDocument(xmlPath);
+        requireRoot(doc, "PasswordVaultPolicies");
+        return doc;
     }
 
     private static String findDeviceName(Element policyElement) {

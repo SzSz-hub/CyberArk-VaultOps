@@ -9,6 +9,7 @@ import java.util.Map;
 public class AppSettings {
     public static final int MAX_SOURCES = 10;
     public static final String DEFAULT_THEME = "light";
+    public static final int MAX_RETENTION_DAYS = 3650;
 
     public static class SourceProfile {
         private final String id;
@@ -61,6 +62,7 @@ public class AppSettings {
     private String theme = DEFAULT_THEME;
     private String defaultReplacementComponentId = "";
     private String storageLocation = "";
+    private int outputRetentionDays = 0;
 
     public synchronized List<SourceProfile> getSourceProfiles() {
         List<SourceProfile> copy = new ArrayList<>();
@@ -124,6 +126,20 @@ public class AppSettings {
 
     public synchronized void setStorageLocation(String storageLocation) {
         this.storageLocation = safe(storageLocation).trim();
+    }
+
+    public synchronized int getOutputRetentionDays() {
+        return outputRetentionDays;
+    }
+
+    public synchronized void setOutputRetentionDays(int days) {
+        if (days < 0) {
+            this.outputRetentionDays = 0;
+        } else if (days > MAX_RETENTION_DAYS) {
+            this.outputRetentionDays = MAX_RETENTION_DAYS;
+        } else {
+            this.outputRetentionDays = days;
+        }
     }
 
     public synchronized void ensureValidActiveProfile() {

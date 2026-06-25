@@ -21,9 +21,11 @@ A JavaFX-based administration tool for CyberArk Vault configurations, designed t
   - Identify configuration overrides
   - Click to view detailed component XML
   - **Right-click (or File / Edit menus) to export, remove or unlink components:**
-    - **Export**: pick a destination folder; each selected component is written to
-      `<folder>/<componentId>/PSM-<componentId>.zip` containing `CC-<componentId>.xml`
-      with the full `<ConnectionComponent>` definition. Multi-select for bulk export.
+    - **Export**: no chooser — each selected component is written to
+      `<exportsRoot>/<componentId>/PSM-<componentId>.zip` containing `CC-<componentId>.xml`
+      with the full `<ConnectionComponent>` definition. `exportsRoot` is `<storageLocation>/exports`
+      when a storage location is set, otherwise `exports/` next to the app. Reveal it via
+      **File → Open Exports Folder**. Multi-select for bulk export.
     - **Remove component**: unlinks the selected component(s) from every policy in `Policies.xml`
       **and** deletes their definitions from `PVConfiguration.xml`.
     - **Unlink from policies**: only removes the references from `Policies.xml`; the definitions in
@@ -131,7 +133,10 @@ The app applies `base.css` first, then selected theme CSS (custom themes can ove
 
 ## Configuration
 
-Settings stored in `app.properties` next to executable/jar:
+Settings are stored in `app.properties` in the per-user data directory
+(`%APPDATA%\CyberArkVaultOps` on Windows, `~/.cyberark-vaultops` otherwise). A legacy
+`app.properties` next to the working directory is still honored when present. The same
+per-user directory also holds `operations.log` and `diagnostics.log`.
 
 ```ini
 # Active profile ID
@@ -156,7 +161,26 @@ defaultReplacementComponent=PSM-RDP
 # (optional; blank = create them next to the app / working directory). Point this
 # at a shared team folder to make results easy to hand off.
 storageLocation=\\\\fileserver\\share\\vaultops
+
+# Auto-purge: delete entries in the "output" and "exports" folders older than this
+# many days (optional; 0 or blank = keep everything). The purge runs at startup and
+# after each offline operation. Only folders this tool created (marked with a
+# .vaultops-artifact file) are ever deleted; unrelated content sharing the folder,
+# plus source files, settings, themes and logs, is untouched.
+outputRetentionDays=30
 ```
+
+### Logs
+
+Two separate logs live in the per-user data directory (`%APPDATA%\CyberArkVaultOps` on
+Windows, `~/.cyberark-vaultops` otherwise):
+
+- `operations.log` — the **audit log**: an append-only record of online (PVWA logon/import/
+  logoff) and high-risk offline operations (order/import/remove/unlink/populate). Never records
+  passwords or session tokens.
+- `diagnostics.log` — a durable, rotating **diagnostics log** of warnings, errors and notable
+  activity, viewable in-app via **Help → View Diagnostics Log...** (filter by level/text, refresh,
+  open file location, or clear). Both logs rotate when they grow past 5 MB.
 
 ## Build & Run
 
@@ -288,12 +312,12 @@ git push origin v1.0.0
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| "No active source" | Open Settings > Sources, add profile with valid folder path |
-| XML files not loading | Verify PVConfiguration.xml and Policies.xml exist in configured folder |
-| Stale indicator persists | Click "Reload All" to refresh file modification timestamps |
-| Slow table scrolling on large datasets | Filtering is responsive; use search to narrow results |
+| Issue                                  | Solution                                                               |
+|----------------------------------------|------------------------------------------------------------------------|
+| "No active source"                     | Open Settings > Sources, add profile with valid folder path            |
+| XML files not loading                  | Verify PVConfiguration.xml and Policies.xml exist in configured folder |
+| Stale indicator persists               | Click "Reload All" to refresh file modification timestamps             |
+| Slow table scrolling on large datasets | Filtering is responsive; use search to narrow results                  |
 
 ## Architecture
 

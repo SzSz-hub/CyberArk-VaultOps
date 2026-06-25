@@ -11,7 +11,6 @@ import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
@@ -44,6 +43,9 @@ public class ComponentOperations {
     private static final DateTimeFormatter LOG_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final long MAX_IMPORT_ENTRY_BYTES = 16L * 1024 * 1024;
     private static final int MAX_IMPORT_ENTRIES = 1_000;
+    private static final long MAX_SOURCE_DOC_BYTES = 64L * 1024 * 1024;
+    private static final int MAX_FILE_NAME_LENGTH = 80;
+    private static final String DEFAULT_CHILD_INDENT = "\n            ";
     private static final java.util.regex.Pattern SAFE_COMPONENT_ID =
             java.util.regex.Pattern.compile("[A-Za-z0-9._\\-]{1,128}");
 
@@ -162,6 +164,7 @@ public class ComponentOperations {
         String safeId = sanitizeFileName(componentId);
         Path componentFolder = destinationRoot.resolve(safeId);
         Files.createDirectories(componentFolder);
+        writeArtifactMarker(componentFolder);
 
         Path zipPath = componentFolder.resolve("PSM-" + safeId + ".zip");
         writeZip(zipPath, "CC-" + safeId + ".xml", xml);
@@ -427,6 +430,10 @@ public class ComponentOperations {
                 skipped.add(label + " (ConnectionComponent Id contains unexpected characters)");
                 continue;
             }
+            if (!looksLikeDefinition(cc)) {
+                skipped.add(label + " (looks like a policy reference, not a component definition)");
+                continue;
+            }
             if (existingIds.contains(id)) {
                 skipped.add(id + " (already exists in PVConfiguration.xml)");
                 continue;
@@ -490,6 +497,10 @@ public class ComponentOperations {
             }
         }
         return null;
+    }
+
+    private boolean looksLikeDefinition(Element cc) {
+        return cc.hasAttribute("DisplayName") || cc.hasAttribute("Type");
     }
 
     private Element findConnectionComponentsContainer(Document doc) {
@@ -851,10 +862,21 @@ public class ComponentOperations {
         for (int suffix = 0; ; suffix++) {
             Path folder = outputRoot.resolve(suffix == 0 ? base : base + "_" + suffix);
             try {
-                return Files.createDirectory(folder);
+                Path created = Files.createDirectory(folder);
+                writeArtifactMarker(created);
+                return created;
             } catch (java.nio.file.FileAlreadyExistsException existing) {
                 // Two operations within the same second collided; disambiguate with the next suffix.
             }
+        }
+    }
+
+    private void writeArtifactMarker(Path folder) {
+        try {
+            Files.writeString(folder.resolve(RetentionManager.ARTIFACT_MARKER),
+                    "CyberArk VaultOps generated artifact" + System.lineSeparator(), StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            // The marker only enables auto-purge scoping; failing to write it is non-fatal.
         }
     }
 
@@ -991,7 +1013,7 @@ public class ComponentOperations {
     private void insertChildKeepingIndent(Element parent, Element child) {
         Document doc = parent.getOwnerDocument();
         Node trailing = parent.getLastChild();
-        Node indentNode = doc.createTextNode("\n            ");
+        Node indentNode = doc.createTextNode(detectChildIndent(parent));
         if (trailing != null && trailing.getNodeType() == Node.TEXT_NODE && trailing.getTextContent().isBlank()) {
             parent.insertBefore(indentNode, trailing);
             parent.insertBefore(child, trailing);
@@ -1000,6 +1022,21 @@ public class ComponentOperations {
             parent.appendChild(child);
             parent.appendChild(doc.createTextNode("\n          "));
         }
+    }
+
+    private String detectChildIndent(Element parent) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node node = children.item(i);
+            if (node.getNodeType() == Node.ELEMENT_NODE) {
+                Node previous = node.getPreviousSibling();
+                if (previous != null && previous.getNodeType() == Node.TEXT_NODE
+                        && previous.getTextContent().isBlank() && previous.getTextContent().contains("\n")) {
+                    return previous.getTextContent();
+                }
+            }
+        }
+        return DEFAULT_CHILD_INDENT;
     }
 
     private Set<String> toRemoveSet(Collection<String> componentIds) {
@@ -1054,8 +1091,14 @@ public class ComponentOperations {
     // ---------------------------------------------------------------------------------------- XML IO
 
     private Document loadDocument(String xmlPath) throws Exception {
+        Path path = Path.of(xmlPath);
+        long size = Files.size(path);
+        if (size <= 0 || size > MAX_SOURCE_DOC_BYTES) {
+            throw new IOException("XML file size " + size + " bytes is outside the supported range (1.."
+                    + MAX_SOURCE_DOC_BYTES + " bytes): " + path.getFileName());
+        }
         DocumentBuilder db = secureDocumentBuilderFactory().newDocumentBuilder();
-        return db.parse(new File(xmlPath));
+        return db.parse(path.toFile());
     }
 
     private Document loadDocumentFromStream(InputStream in) throws Exception {
@@ -1108,7 +1151,7 @@ public class ComponentOperations {
 
     private void writeDocument(Document doc, Path path) throws Exception {
         Transformer transformer = newSecureTransformer();
-        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
         StringWriter writer = new StringWriter();
         transformer.transform(new DOMSource(doc), new StreamResult(writer));
         byte[] bytes = spaceBeforeSelfClosingTags(writer.toString()).getBytes(StandardCharsets.UTF_8);
@@ -1155,7 +1198,12 @@ public class ComponentOperations {
         if (name == null || name.isBlank()) {
             return "unnamed";
         }
-        return name.trim().replaceAll("[^A-Za-z0-9._-]", "_");
+        String cleaned = name.trim().replaceAll("[^A-Za-z0-9._-]", "_");
+        if (cleaned.length() <= MAX_FILE_NAME_LENGTH) {
+            return cleaned;
+        }
+        String suffix = Integer.toHexString(cleaned.hashCode());
+        return cleaned.substring(0, MAX_FILE_NAME_LENGTH - suffix.length() - 1) + "_" + suffix;
     }
 
     private static final class BoundedInputStream extends InputStream {

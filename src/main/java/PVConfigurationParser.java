@@ -8,6 +8,7 @@ public class PVConfigurationParser extends Parser {
 
     public List<ConnectionComponentEntry> GetConnectionComponents(String pvConfigurationPath) throws Exception {
         Document doc = loadSecureDocument(pvConfigurationPath);
+        requireRoot(doc, "PasswordVaultConfiguration");
 
         NodeList componentNodes = doc.getElementsByTagName("ConnectionComponent");
         List<ConnectionComponentEntry> entries = new ArrayList<>();
@@ -41,6 +42,7 @@ public class PVConfigurationParser extends Parser {
 
     public List<PSMServerEntry> getPSMServers(String pvConfigurationPath) throws Exception {
         Document doc = loadSecureDocument(pvConfigurationPath);
+        requireRoot(doc, "PasswordVaultConfiguration");
 
         NodeList serverNodes = doc.getElementsByTagName("PSMServer");
         List<PSMServerEntry> entries = new ArrayList<>();
@@ -91,6 +93,7 @@ public class PVConfigurationParser extends Parser {
 
     public List<PSMPServerEntry> getPSMPServers(String pvConfigurationPath) throws Exception {
         Document doc = loadSecureDocument(pvConfigurationPath);
+        requireRoot(doc, "PasswordVaultConfiguration");
 
         NodeList serverNodes = doc.getElementsByTagName("PSMPServer");
         List<PSMPServerEntry> entries = new ArrayList<>();
