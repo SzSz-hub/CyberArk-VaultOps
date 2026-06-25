@@ -1905,7 +1905,7 @@ public class AppController {
 
         binding = new FilterBinding();
         ObservableList<T> backing = FXCollections.observableArrayList(masterData);
-        FilteredList<T> filteredData = new FilteredList<>(backing, p -> true);
+        FilteredList<T> filteredData = new FilteredList<>(backing, entry -> columnFiltersMatch(entry, table));
 
         for (TableColumn<T, ?> col : table.getColumns()) {
             if (col.getUserData() instanceof TextField tf) {
