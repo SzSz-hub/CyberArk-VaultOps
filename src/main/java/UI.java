@@ -43,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 public class UI {
     static final String TAB_CONNECTION_COMPONENTS = "Connection Components";
@@ -109,6 +110,10 @@ public class UI {
     private Runnable onOrderComponents = NO_OP;
     private Runnable onImportPsmComponent = NO_OP;
     private Runnable onFindOrphanComponents = NO_OP;
+    private Runnable onPopulateEmptyPolicies = NO_OP;
+    private Consumer<PoliciesParser.ComponentAssignmentEntry> onOrphanRemoveReference = entry -> {};
+    private Consumer<PoliciesParser.ComponentAssignmentEntry> onOrphanRemoveComponent = entry -> {};
+    private Consumer<List<PoliciesParser.ComponentAssignmentEntry>> onOrphanRemoveAll = entries -> {};
     private Runnable onPvwaConnect = NO_OP;
     private Runnable onPvwaDisconnect = NO_OP;
     private Runnable onImportFromFileOnline = NO_OP;
@@ -329,6 +334,22 @@ public class UI {
         this.onFindOrphanComponents = safeRunnable(onFindOrphanComponents);
     }
 
+    void setOnPopulateEmptyPolicies(Runnable onPopulateEmptyPolicies) {
+        this.onPopulateEmptyPolicies = safeRunnable(onPopulateEmptyPolicies);
+    }
+
+    void setOnOrphanRemoveReference(Consumer<PoliciesParser.ComponentAssignmentEntry> handler) {
+        this.onOrphanRemoveReference = handler == null ? entry -> {} : handler;
+    }
+
+    void setOnOrphanRemoveComponent(Consumer<PoliciesParser.ComponentAssignmentEntry> handler) {
+        this.onOrphanRemoveComponent = handler == null ? entry -> {} : handler;
+    }
+
+    void setOnOrphanRemoveAll(Consumer<List<PoliciesParser.ComponentAssignmentEntry>> handler) {
+        this.onOrphanRemoveAll = handler == null ? entries -> {} : handler;
+    }
+
     void setOnImportPsmComponent(Runnable onImportPsmComponent) {
         this.onImportPsmComponent = safeRunnable(onImportPsmComponent);
     }
@@ -451,12 +472,15 @@ public class UI {
         unlinkComponentsItem.setOnAction(event -> unlinkSelectedComponentsFromMenu());
         MenuItem findOrphansItem = new MenuItem("Find Orphaned Component References...");
         findOrphansItem.setOnAction(event -> onFindOrphanComponents.run());
+        MenuItem populateEmptyItem = new MenuItem("Populate Empty Policies...");
+        populateEmptyItem.setOnAction(event -> onPopulateEmptyPolicies.run());
         editMenu.getItems().addAll(
                 orderComponentsItem,
                 removeComponentsItem,
                 unlinkComponentsItem,
                 new SeparatorMenuItem(),
-                findOrphansItem
+                findOrphansItem,
+                populateEmptyItem
         );
 
         Menu compareMenu = new Menu("Compare");
@@ -1157,18 +1181,24 @@ public class UI {
         return alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK;
     }
 
-    ComponentOperations.EmptyPolicyChoice showEmptyPolicyDialog(String policyId, List<String> availableComponentIds) {
+    ComponentOperations.EmptyPolicyChoice showEmptyPolicyDialog(String policyId, List<String> availableComponentIds,
+                                                                boolean skipAllowed) {
         Stage dialog = new Stage();
         dialog.initOwner(primaryStage);
         dialog.initModality(Modality.APPLICATION_MODAL);
-        dialog.setTitle("Policy would have no connection component");
+        dialog.setTitle(skipAllowed ? "Policy has no connection component" : "Policy would have no connection component");
 
-        Label header = new Label("Policy \"" + policyId + "\" would be left without any connection component.");
+        Label header = new Label(skipAllowed
+                ? "Policy \"" + policyId + "\" has no connection component."
+                : "Policy \"" + policyId + "\" would be left without any connection component.");
         header.getStyleClass().add("details-title");
         header.setWrapText(true);
 
-        Label info = new Label("CyberArk / Idira requires at least one connection component per policy. "
-                + "Choose a replacement to add, or cancel the whole removal.");
+        Label info = new Label(skipAllowed
+                ? "This policy was already empty in the source. Disabled or grouping policies may legitimately "
+                        + "have none, so you decide: add a connection component, or skip to leave it empty."
+                : "This removal would leave the policy empty. CyberArk / Idira requires at least one connection "
+                        + "component here, so a replacement must be added (or cancel the whole removal).");
         info.setWrapText(true);
 
         // Components are listed alphabetically; the filter narrows down a long list (300+) quickly.
@@ -1222,14 +1252,28 @@ public class UI {
             dialog.close();
         });
 
-        Button cancelButton = new Button("Cancel Removal");
+        Button cancelButton = new Button("Cancel Operation");
         cancelButton.setCancelButton(true);
         cancelButton.setOnAction(event -> {
             result[0] = ComponentOperations.EmptyPolicyChoice.cancel();
             dialog.close();
         });
 
-        HBox actions = new HBox(8, addButton, cancelButton);
+        HBox actions = new HBox(8, addButton);
+        if (skipAllowed) {
+            Button skipButton = new Button("Skip (leave empty)");
+            skipButton.setOnAction(event -> {
+                result[0] = ComponentOperations.EmptyPolicyChoice.skip(false);
+                dialog.close();
+            });
+            Button skipAllButton = new Button("Skip all empty policies");
+            skipAllButton.setOnAction(event -> {
+                result[0] = ComponentOperations.EmptyPolicyChoice.skip(true);
+                dialog.close();
+            });
+            actions.getChildren().addAll(skipButton, skipAllButton);
+        }
+        actions.getChildren().add(cancelButton);
         actions.getStyleClass().add("dialog-actions");
         actions.setAlignment(Pos.CENTER_RIGHT);
 
@@ -1243,7 +1287,7 @@ public class UI {
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
-        Scene scene = new Scene(content, 460, 360);
+        Scene scene = new Scene(content, 520, 380);
         applyTheme(scene);
         dialog.setScene(scene);
         dialog.showAndWait();
@@ -1630,14 +1674,47 @@ public class UI {
         table.getColumns().addAll(componentColumn, platformColumn, policyColumn, enabledColumn, overridesColumn);
         VBox.setVgrow(table, Priority.ALWAYS);
 
-        HBox controls = new HBox(12, summary, searchField);
+        table.setRowFactory(tv -> {
+            TableRow<PoliciesParser.ComponentAssignmentEntry> row = new TableRow<>();
+            ContextMenu rowMenu = new ContextMenu();
+            MenuItem removeReferenceItem = new MenuItem("Remove This Reference\u2026");
+            removeReferenceItem.setOnAction(event -> {
+                if (row.getItem() != null) {
+                    onOrphanRemoveReference.accept(row.getItem());
+                }
+            });
+            MenuItem removeComponentItem = new MenuItem("Remove Component From All Policies\u2026");
+            removeComponentItem.setOnAction(event -> {
+                if (row.getItem() != null) {
+                    onOrphanRemoveComponent.accept(row.getItem());
+                }
+            });
+            rowMenu.getItems().addAll(removeReferenceItem, removeComponentItem);
+            row.contextMenuProperty().bind(javafx.beans.binding.Bindings
+                    .when(row.emptyProperty())
+                    .then((ContextMenu) null)
+                    .otherwise(rowMenu));
+            return row;
+        });
+
+        Button removeAllButton = new Button("Remove All Orphans\u2026");
+        removeAllButton.setDisable(orphanCount == 0);
+        removeAllButton.setOnAction(event ->
+                onOrphanRemoveAll.accept(new ArrayList<>(result.orphans() == null ? List.of() : result.orphans())));
+
+        HBox controls = new HBox(12, summary, searchField, removeAllButton);
         controls.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(searchField, Priority.ALWAYS);
+
+        Label hint = new Label("Right-click a row to remove a single reference or that component from every policy. "
+                + "Removals are non-destructive: an updated Policies.xml + changelog are written to the output folder.");
+        hint.getStyleClass().add("details-source");
+        hint.setWrapText(true);
 
         VBox headerBox = new VBox(2, title, subtitle, counts);
         headerBox.getStyleClass().add("details-header");
 
-        VBox content = new VBox(10, headerBox, controls, table);
+        VBox content = new VBox(10, headerBox, controls, table, hint);
         content.getStyleClass().add("content-pane");
         content.setPadding(new Insets(16));
 
@@ -2567,6 +2644,22 @@ public class UI {
             // Fall through to the toast below.
         }
         showToast("Open in your browser: " + url);
+    }
+
+    void revealFolder(Path folder) {
+        if (folder == null) {
+            return;
+        }
+        try {
+            Files.createDirectories(folder);
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
+                Desktop.getDesktop().open(folder.toFile());
+            } else {
+                showToast("Saved to: " + folder);
+            }
+        } catch (IOException | UnsupportedOperationException e) {
+            showToast("Saved to: " + folder);
+        }
     }
 
     private void openThemesFolder() {

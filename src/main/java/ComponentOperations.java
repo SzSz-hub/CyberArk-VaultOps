@@ -35,7 +35,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -68,7 +67,7 @@ public class ComponentOperations {
     }
 
     public static final class EmptyPolicyChoice {
-        public enum Action { ADD, CANCEL }
+        public enum Action { ADD, SKIP, CANCEL }
 
         private final Action action;
         private final String componentId;
@@ -90,6 +89,10 @@ public class ComponentOperations {
             return new EmptyPolicyChoice(Action.ADD, componentId, enabled, applyToAll);
         }
 
+        public static EmptyPolicyChoice skip(boolean applyToAll) {
+            return new EmptyPolicyChoice(Action.SKIP, null, false, applyToAll);
+        }
+
         public Action action() {
             return action;
         }
@@ -105,6 +108,15 @@ public class ComponentOperations {
         public boolean applyToAll() {
             return applyToAll;
         }
+    }
+
+    // Resolves what to do with a policy that has no connection component. skipAllowed is true only for
+    // policies that were ALREADY empty in the source (e.g. disabled or grouping policies, which may
+    // legitimately have none) — the operator may then add a component or skip it. When the operation itself
+    // emptied the policy (removed its last component) skipAllowed is false: a replacement is required.
+    @FunctionalInterface
+    public interface EmptyPolicyResolver {
+        EmptyPolicyChoice resolve(String policyId, boolean skipAllowed);
     }
 
     public record RemovalResult(
@@ -126,10 +138,11 @@ public class ComponentOperations {
             boolean cancelled,
             int totalRemoved,
             Map<String, Integer> removedPerComponent,
-            List<String> emptyPoliciesFixed) {
+            List<String> emptyPoliciesFixed,
+            List<String> emptyPoliciesLeftEmpty) {
 
         static PolicyEditResult cancelledResult() {
-            return new PolicyEditResult(true, 0, Map.of(), List.of());
+            return new PolicyEditResult(true, 0, Map.of(), List.of(), List.of());
         }
     }
 
@@ -263,17 +276,15 @@ public class ComponentOperations {
     // -------------------------------------------------------------------------------- Invariant checks
 
     private void assertRemovalComplete(Document policiesDoc, Document pvDoc, Set<String> removeSet) {
+        // Note: an empty <ConnectionComponents> is NOT treated as an error here. Disabled and grouping
+        // policies may legitimately have none, and applyPolicyRemovals already guarantees that any policy the
+        // operation itself emptied was repopulated (only operator-skipped pre-existing empties remain empty).
         for (Element policy : toElementList(policiesDoc.getElementsByTagName("Policy"))) {
             Element ccParent = firstChildElement(policy, "ConnectionComponents");
             if (ccParent == null) {
                 continue;
             }
-            List<Element> refs = childElements(ccParent, "ConnectionComponent");
-            if (refs.isEmpty()) {
-                throw new IllegalStateException(
-                        "Policy '" + policy.getAttribute("ID").trim() + "' would be left without any connection component.");
-            }
-            for (Element ref : refs) {
+            for (Element ref : childElements(ccParent, "ConnectionComponent")) {
                 if (removeSet.contains(ref.getAttribute("Id").trim())) {
                     throw new IllegalStateException("Removed component is still referenced by policy '"
                             + policy.getAttribute("ID").trim() + "': " + ref.getAttribute("Id").trim());
@@ -288,6 +299,24 @@ public class ComponentOperations {
                         throw new IllegalStateException(
                                 "Removed component definition is still present: " + def.getAttribute("Id").trim());
                     }
+                }
+            }
+        }
+    }
+
+    private void assertScopedRemovalComplete(Document policiesDoc, Set<String> removeSet, String targetPolicyId) {
+        for (Element policy : toElementList(policiesDoc.getElementsByTagName("Policy"))) {
+            if (targetPolicyId == null || !targetPolicyId.equalsIgnoreCase(policy.getAttribute("ID").trim())) {
+                continue;
+            }
+            Element ccParent = firstChildElement(policy, "ConnectionComponents");
+            if (ccParent == null) {
+                continue;
+            }
+            for (Element ref : childElements(ccParent, "ConnectionComponent")) {
+                if (removeSet.contains(ref.getAttribute("Id").trim())) {
+                    throw new IllegalStateException("Removed component is still referenced by policy '"
+                            + policy.getAttribute("ID").trim() + "': " + ref.getAttribute("Id").trim());
                 }
             }
         }
@@ -502,12 +531,12 @@ public class ComponentOperations {
             Path outputRoot,
             String sourceLabel,
             String sourceFolder,
-            Function<String, EmptyPolicyChoice> emptyPolicyResolver) throws Exception {
+            EmptyPolicyResolver emptyPolicyResolver) throws Exception {
 
         Set<String> removeSet = toRemoveSet(componentIds);
 
         Document policiesDoc = loadDocument(policiesPath);
-        PolicyEditResult edit = applyPolicyRemovals(policiesDoc, removeSet, emptyPolicyResolver);
+        PolicyEditResult edit = applyPolicyRemovals(policiesDoc, removeSet, null, emptyPolicyResolver);
         if (edit.cancelled()) {
             return RemovalResult.cancelledResult();
         }
@@ -525,6 +554,38 @@ public class ComponentOperations {
                 edit.totalRemoved(), 0, edit.removedPerComponent(), edit.emptyPoliciesFixed());
     }
 
+    public RemovalResult unlinkConnectionComponentFromPolicy(
+            String policiesPath,
+            String componentId,
+            String policyId,
+            Path outputRoot,
+            String sourceLabel,
+            String sourceFolder,
+            EmptyPolicyResolver emptyPolicyResolver) throws Exception {
+
+        Set<String> removeSet = toRemoveSet(List.of(componentId));
+        String targetPolicyId = policyId == null ? "" : policyId.trim();
+
+        Document policiesDoc = loadDocument(policiesPath);
+        PolicyEditResult edit = applyPolicyRemovals(policiesDoc, removeSet, targetPolicyId, emptyPolicyResolver);
+        if (edit.cancelled()) {
+            return RemovalResult.cancelledResult();
+        }
+
+        assertScopedRemovalComplete(policiesDoc, removeSet, targetPolicyId);
+
+        Path folder = createOutputFolder(outputRoot, sourceLabel);
+        Path outputPolicies = folder.resolve("Policies.xml");
+        writeDocument(policiesDoc, outputPolicies);
+
+        Path changelog = folder.resolve("changelog.txt");
+        writeChangelog(changelog, "Unlink from policy '" + targetPolicyId + "' (Policies.xml only)",
+                sourceLabel, sourceFolder, removeSet, edit, 0);
+
+        return new RemovalResult(false, outputPolicies, null, changelog,
+                edit.totalRemoved(), 0, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+    }
+
     // ------------------------------------------------------------------ Remove (Policies + PVConfiguration)
 
     public RemovalResult removeConnectionComponents(
@@ -534,12 +595,12 @@ public class ComponentOperations {
             Path outputRoot,
             String sourceLabel,
             String sourceFolder,
-            Function<String, EmptyPolicyChoice> emptyPolicyResolver) throws Exception {
+            EmptyPolicyResolver emptyPolicyResolver) throws Exception {
 
         Set<String> removeSet = toRemoveSet(componentIds);
 
         Document policiesDoc = loadDocument(policiesPath);
-        PolicyEditResult edit = applyPolicyRemovals(policiesDoc, removeSet, emptyPolicyResolver);
+        PolicyEditResult edit = applyPolicyRemovals(policiesDoc, removeSet, null, emptyPolicyResolver);
         if (edit.cancelled()) {
             return RemovalResult.cancelledResult();
         }
@@ -565,24 +626,63 @@ public class ComponentOperations {
                 edit.totalRemoved(), removedDefinitions, edit.removedPerComponent(), edit.emptyPoliciesFixed());
     }
 
+    // ---------------------------------------------------------------------------------- Populate empty
+
+    public RemovalResult populateEmptyPolicies(
+            String policiesPath,
+            Path outputRoot,
+            String sourceLabel,
+            String sourceFolder,
+            EmptyPolicyResolver emptyPolicyResolver) throws Exception {
+
+        Document policiesDoc = loadDocument(policiesPath);
+        // An empty removal set means pass 1 removes nothing; pass 2 still populates every empty policy.
+        PolicyEditResult edit = applyPolicyRemovals(policiesDoc, Set.of(), null, emptyPolicyResolver);
+        if (edit.cancelled()) {
+            return RemovalResult.cancelledResult();
+        }
+        if (edit.emptyPoliciesFixed().isEmpty()) {
+            // Nothing was empty; don't write a redundant copy. outputPolicies == null signals "no changes".
+            return new RemovalResult(false, null, null, null, 0, 0, Map.of(), List.of());
+        }
+
+        assertRemovalComplete(policiesDoc, null, Set.of());
+
+        Path folder = createOutputFolder(outputRoot, sourceLabel);
+        Path outputPolicies = folder.resolve("Policies.xml");
+        writeDocument(policiesDoc, outputPolicies);
+
+        Path changelog = folder.resolve("changelog.txt");
+        writeChangelog(changelog, "Populate empty policies (Policies.xml only)", sourceLabel, sourceFolder,
+                Set.of(), edit, 0);
+
+        return new RemovalResult(false, outputPolicies, null, changelog,
+                0, 0, Map.of(), edit.emptyPoliciesFixed());
+    }
+
     // ---------------------------------------------------------------------------------- Policies editing
 
     private PolicyEditResult applyPolicyRemovals(
             Document policiesDoc,
             Set<String> removeSet,
-            Function<String, EmptyPolicyChoice> emptyPolicyResolver) {
+            String targetPolicyId,
+            EmptyPolicyResolver emptyPolicyResolver) {
 
-        EmptyPolicyChoice cachedChoice = null;
         int totalRemoved = 0;
         Map<String, Integer> removedPerComponent = new LinkedHashMap<>();
-        List<String> emptyPoliciesFixed = new ArrayList<>();
+        Set<Element> emptiedByOperation = Collections.newSetFromMap(new IdentityHashMap<>());
 
+        // Pass 1: remove the requested components (respecting the optional single-policy scope), and remember
+        // which policies WE emptied — those require a replacement (a policy that was just stripped of its last
+        // component must keep at least one).
         for (Element policy : toElementList(policiesDoc.getElementsByTagName("Policy"))) {
+            if (targetPolicyId != null && !targetPolicyId.equalsIgnoreCase(policy.getAttribute("ID").trim())) {
+                continue;
+            }
             Element ccParent = firstChildElement(policy, "ConnectionComponents");
             if (ccParent == null) {
                 continue;
             }
-
             int removedHere = 0;
             for (Element cc : childElements(ccParent, "ConnectionComponent")) {
                 String id = cc.getAttribute("Id").trim();
@@ -593,43 +693,70 @@ public class ComponentOperations {
                     removedPerComponent.merge(id, 1, Integer::sum);
                 }
             }
-
-            if (removedHere == 0) {
-                continue;
-            }
-
-            if (childElements(ccParent, "ConnectionComponent").isEmpty()) {
-                String policyId = policy.getAttribute("ID");
-                EmptyPolicyChoice choice = cachedChoice;
-                if (choice == null) {
-                    choice = emptyPolicyResolver.apply(policyId);
-                    if (choice == null || choice.action() == EmptyPolicyChoice.Action.CANCEL) {
-                        return PolicyEditResult.cancelledResult();
-                    }
-                    if (choice.applyToAll()) {
-                        cachedChoice = choice;
-                    }
-                }
-
-                String replacementId = choice.componentId() == null ? "" : choice.componentId().trim();
-                if (replacementId.isBlank()) {
-                    return PolicyEditResult.cancelledResult();
-                }
-                if (removeSet.contains(replacementId)) {
-                    throw new IllegalArgumentException(
-                            "Replacement component '" + replacementId + "' is part of the removal set and cannot be reused.");
-                }
-
-                Element replacement = policiesDoc.createElement("ConnectionComponent");
-                replacement.setAttribute("Id", replacementId);
-                replacement.setAttribute("Enable", choice.enabled() ? "Yes" : "No");
-                insertChildKeepingIndent(ccParent, replacement);
-                emptyPoliciesFixed.add(policyId + " -> " + replacementId
-                        + " (" + (choice.enabled() ? "enabled" : "disabled") + ")");
+            if (removedHere > 0 && childElements(ccParent, "ConnectionComponent").isEmpty()) {
+                emptiedByOperation.add(policy);
             }
         }
 
-        return new PolicyEditResult(false, totalRemoved, removedPerComponent, emptyPoliciesFixed);
+        // Pass 2: handle every policy left without a connection component. Policies WE emptied are required to
+        // be repopulated (no skip). Policies that were ALREADY empty in the source (disabled / grouping
+        // policies may legitimately have none) let the operator decide — add a replacement or skip (leave
+        // empty). "Apply to all" / "Skip all" are cached separately per category.
+        EmptyPolicyChoice cachedRequired = null;
+        EmptyPolicyChoice cachedOptional = null;
+        List<String> emptyPoliciesFixed = new ArrayList<>();
+        List<String> emptyPoliciesLeftEmpty = new ArrayList<>();
+        for (Element policy : toElementList(policiesDoc.getElementsByTagName("Policy"))) {
+            Element ccParent = firstChildElement(policy, "ConnectionComponents");
+            if (ccParent == null || !childElements(ccParent, "ConnectionComponent").isEmpty()) {
+                continue;
+            }
+
+            String policyId = policy.getAttribute("ID");
+            boolean required = emptiedByOperation.contains(policy);
+
+            EmptyPolicyChoice choice = required ? cachedRequired : cachedOptional;
+            if (choice == null) {
+                choice = emptyPolicyResolver.resolve(policyId, !required);
+                if (choice == null || choice.action() == EmptyPolicyChoice.Action.CANCEL) {
+                    return PolicyEditResult.cancelledResult();
+                }
+                if (required && choice.action() == EmptyPolicyChoice.Action.SKIP) {
+                    // A policy we emptied may not be skipped; treat as cancel rather than write an invalid file.
+                    return PolicyEditResult.cancelledResult();
+                }
+                if (choice.applyToAll()) {
+                    if (required) {
+                        cachedRequired = choice;
+                    } else {
+                        cachedOptional = choice;
+                    }
+                }
+            }
+
+            if (choice.action() == EmptyPolicyChoice.Action.SKIP) {
+                emptyPoliciesLeftEmpty.add(policyId);
+                continue;
+            }
+
+            String replacementId = choice.componentId() == null ? "" : choice.componentId().trim();
+            if (replacementId.isBlank()) {
+                return PolicyEditResult.cancelledResult();
+            }
+            if (removeSet.contains(replacementId)) {
+                throw new IllegalArgumentException(
+                        "Replacement component '" + replacementId + "' is part of the removal set and cannot be reused.");
+            }
+
+            Element replacement = policiesDoc.createElement("ConnectionComponent");
+            replacement.setAttribute("Id", replacementId);
+            replacement.setAttribute("Enable", choice.enabled() ? "Yes" : "No");
+            insertChildKeepingIndent(ccParent, replacement);
+            emptyPoliciesFixed.add(policyId + " -> " + replacementId
+                    + " (" + (choice.enabled() ? "enabled" : "disabled") + ")");
+        }
+
+        return new PolicyEditResult(false, totalRemoved, removedPerComponent, emptyPoliciesFixed, emptyPoliciesLeftEmpty);
     }
 
     // ------------------------------------------------------------------------ PVConfiguration editing
@@ -716,6 +843,16 @@ public class ComponentOperations {
         } else {
             for (String fixed : edit.emptyPoliciesFixed()) {
                 sb.append("  - ").append(fixed).append('\n');
+            }
+        }
+        sb.append('\n');
+
+        sb.append("Policies left empty by operator choice (already had no connection component):\n");
+        if (edit.emptyPoliciesLeftEmpty().isEmpty()) {
+            sb.append("  (none)\n");
+        } else {
+            for (String skipped : edit.emptyPoliciesLeftEmpty()) {
+                sb.append("  - ").append(skipped).append('\n');
             }
         }
 
