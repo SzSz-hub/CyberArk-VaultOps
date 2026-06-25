@@ -60,6 +60,7 @@ public class AppSettings {
     private String activeProfileId;
     private String theme = DEFAULT_THEME;
     private String defaultReplacementComponentId = "";
+    private String storageLocation = "";
 
     public synchronized List<SourceProfile> getSourceProfiles() {
         List<SourceProfile> copy = new ArrayList<>();
@@ -101,20 +102,28 @@ public class AppSettings {
         return null;
     }
 
-    public String getTheme() {
+    public synchronized String getTheme() {
         return theme;
     }
 
-    public void setTheme(String theme) {
+    public synchronized void setTheme(String theme) {
         this.theme = normalizeTheme(theme);
     }
 
-    public String getDefaultReplacementComponentId() {
+    public synchronized String getDefaultReplacementComponentId() {
         return defaultReplacementComponentId;
     }
 
-    public void setDefaultReplacementComponentId(String defaultReplacementComponentId) {
+    public synchronized void setDefaultReplacementComponentId(String defaultReplacementComponentId) {
         this.defaultReplacementComponentId = safe(defaultReplacementComponentId).trim();
+    }
+
+    public synchronized String getStorageLocation() {
+        return storageLocation;
+    }
+
+    public synchronized void setStorageLocation(String storageLocation) {
+        this.storageLocation = safe(storageLocation).trim();
     }
 
     public synchronized void ensureValidActiveProfile() {

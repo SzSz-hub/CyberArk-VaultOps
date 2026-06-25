@@ -29,7 +29,9 @@ A JavaFX-based administration tool for CyberArk Vault configurations, designed t
     - **Unlink from policies**: only removes the references from `Policies.xml`; the definitions in
       `PVConfiguration.xml` are kept.
     - Remove and Unlink never modify the source files — updated copies and a `changelog.txt` are
-      written to `output/<timestamp>_<source>/`, ready to import back into CyberArk. Multi-select for
+      written to `<storageLocation>/output/<timestamp>_<source>/` (or `output/` next to the app when no
+      storage location is set), ready to import back into CyberArk. Results are not opened automatically —
+      use **File → Open Output Folder** (and **Open Exports Folder** for exports). Multi-select for
       bulk operations.
     - When a removal would leave a policy with no connection component, a dialog prompts for a
       replacement (choose the component, whether it is enabled/visible, optionally apply the same
@@ -149,6 +151,11 @@ theme=dark
 # Default connection component used when removing/unlinking would leave a policy
 # empty (optional; blank = use the first available component alphabetically)
 defaultReplacementComponent=PSM-RDP
+
+# Base location for the generated "output" (offline edits) and "exports" folders
+# (optional; blank = create them next to the app / working directory). Point this
+# at a shared team folder to make results easy to hand off.
+storageLocation=\\\\fileserver\\share\\vaultops
 ```
 
 ## Build & Run

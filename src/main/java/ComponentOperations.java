@@ -14,7 +14,6 @@ import javax.xml.transform.stream.StreamResult;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -44,6 +43,9 @@ public class ComponentOperations {
     private static final DateTimeFormatter FOLDER_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
     private static final DateTimeFormatter LOG_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final long MAX_IMPORT_ENTRY_BYTES = 16L * 1024 * 1024;
+    private static final int MAX_IMPORT_ENTRIES = 1_000;
+    private static final java.util.regex.Pattern SAFE_COMPONENT_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9._\\-]{1,128}");
 
     public record ExportResult(String componentId, Path zipPath) {
     }
@@ -110,10 +112,6 @@ public class ComponentOperations {
         }
     }
 
-    // Resolves what to do with a policy that has no connection component. skipAllowed is true only for
-    // policies that were ALREADY empty in the source (e.g. disabled or grouping policies, which may
-    // legitimately have none) — the operator may then add a component or skip it. When the operation itself
-    // emptied the policy (removed its last component) skipAllowed is false: a replacement is required.
     @FunctionalInterface
     public interface EmptyPolicyResolver {
         EmptyPolicyChoice resolve(String policyId, boolean skipAllowed);
@@ -263,14 +261,18 @@ public class ComponentOperations {
         assertNoDuplicateDefinitions(pvDoc);
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
-        Path outputPv = folder.resolve("PVConfiguration.xml");
-        writeDocument(pvDoc, outputPv);
-        Path outputPolicies = folder.resolve("Policies.xml");
-        writeDocument(policiesDoc, outputPolicies);
-        Path changelog = folder.resolve("changelog.txt");
-        writeOrderChangelog(changelog, sourceLabel, sourceFolder, pvReordered, policiesReordered);
-
-        return new OrderResult(folder, outputPv, outputPolicies, changelog, pvReordered, policiesReordered);
+        try {
+            Path outputPv = folder.resolve("PVConfiguration.xml");
+            writeDocument(pvDoc, outputPv);
+            Path outputPolicies = folder.resolve("Policies.xml");
+            writeDocument(policiesDoc, outputPolicies);
+            Path changelog = folder.resolve("changelog.txt");
+            writeOrderChangelog(changelog, sourceLabel, sourceFolder, pvReordered, policiesReordered);
+            return new OrderResult(folder, outputPv, outputPolicies, changelog, pvReordered, policiesReordered);
+        } catch (Exception failure) {
+            deleteFolderQuietly(folder);
+            throw failure;
+        }
     }
 
     // -------------------------------------------------------------------------------- Invariant checks
@@ -412,9 +414,17 @@ public class ComponentOperations {
                 skipped.add(label + " (no ConnectionComponent XML found)");
                 continue;
             }
+            if (!"ConnectionComponent".equalsIgnoreCase(cc.getTagName())) {
+                skipped.add(label + " (root element is not a ConnectionComponent)");
+                continue;
+            }
             String id = cc.getAttribute("Id").trim();
             if (id.isBlank()) {
                 skipped.add(label + " (ConnectionComponent has no Id)");
+                continue;
+            }
+            if (!SAFE_COMPONENT_ID.matcher(id).matches()) {
+                skipped.add(label + " (ConnectionComponent Id contains unexpected characters)");
                 continue;
             }
             if (existingIds.contains(id)) {
@@ -434,19 +444,27 @@ public class ComponentOperations {
         assertNoDuplicateDefinitions(pvDoc);
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
-        Path outputPv = folder.resolve("PVConfiguration.xml");
-        writeDocument(pvDoc, outputPv);
-        Path changelog = folder.resolve("changelog.txt");
-        writeImportChangelog(changelog, sourceLabel, sourceFolder, imported, skipped);
-
-        return new ImportResult(true, folder, outputPv, changelog, imported, skipped);
+        try {
+            Path outputPv = folder.resolve("PVConfiguration.xml");
+            writeDocument(pvDoc, outputPv);
+            Path changelog = folder.resolve("changelog.txt");
+            writeImportChangelog(changelog, sourceLabel, sourceFolder, imported, skipped);
+            return new ImportResult(true, folder, outputPv, changelog, imported, skipped);
+        } catch (Exception failure) {
+            deleteFolderQuietly(folder);
+            throw failure;
+        }
     }
 
     private Element readConnectionComponentFromZip(Path zipPath) throws Exception {
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
             Enumeration<? extends ZipEntry> entries = zipFile.entries();
+            int scanned = 0;
             while (entries.hasMoreElements()) {
                 ZipEntry entry = entries.nextElement();
+                if (++scanned > MAX_IMPORT_ENTRIES) {
+                    throw new IOException("Archive has more than " + MAX_IMPORT_ENTRIES + " entries; refusing to scan.");
+                }
                 if (entry.isDirectory() || !entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
                     continue;
                 }
@@ -544,14 +562,19 @@ public class ComponentOperations {
         assertRemovalComplete(policiesDoc, null, removeSet);
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
-        Path outputPolicies = folder.resolve("Policies.xml");
-        writeDocument(policiesDoc, outputPolicies);
+        try {
+            Path outputPolicies = folder.resolve("Policies.xml");
+            writeDocument(policiesDoc, outputPolicies);
 
-        Path changelog = folder.resolve("changelog.txt");
-        writeChangelog(changelog, "Unlink (Policies.xml only)", sourceLabel, sourceFolder, removeSet, edit, 0);
+            Path changelog = folder.resolve("changelog.txt");
+            writeChangelog(changelog, "Unlink (Policies.xml only)", sourceLabel, sourceFolder, removeSet, edit, 0);
 
-        return new RemovalResult(false, outputPolicies, null, changelog,
-                edit.totalRemoved(), 0, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+            return new RemovalResult(false, outputPolicies, null, changelog,
+                    edit.totalRemoved(), 0, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+        } catch (Exception failure) {
+            deleteFolderQuietly(folder);
+            throw failure;
+        }
     }
 
     public RemovalResult unlinkConnectionComponentFromPolicy(
@@ -575,15 +598,20 @@ public class ComponentOperations {
         assertScopedRemovalComplete(policiesDoc, removeSet, targetPolicyId);
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
-        Path outputPolicies = folder.resolve("Policies.xml");
-        writeDocument(policiesDoc, outputPolicies);
+        try {
+            Path outputPolicies = folder.resolve("Policies.xml");
+            writeDocument(policiesDoc, outputPolicies);
 
-        Path changelog = folder.resolve("changelog.txt");
-        writeChangelog(changelog, "Unlink from policy '" + targetPolicyId + "' (Policies.xml only)",
-                sourceLabel, sourceFolder, removeSet, edit, 0);
+            Path changelog = folder.resolve("changelog.txt");
+            writeChangelog(changelog, "Unlink from policy '" + targetPolicyId + "' (Policies.xml only)",
+                    sourceLabel, sourceFolder, removeSet, edit, 0);
 
-        return new RemovalResult(false, outputPolicies, null, changelog,
-                edit.totalRemoved(), 0, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+            return new RemovalResult(false, outputPolicies, null, changelog,
+                    edit.totalRemoved(), 0, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+        } catch (Exception failure) {
+            deleteFolderQuietly(folder);
+            throw failure;
+        }
     }
 
     // ------------------------------------------------------------------ Remove (Policies + PVConfiguration)
@@ -611,19 +639,23 @@ public class ComponentOperations {
         assertRemovalComplete(policiesDoc, pvDoc, removeSet);
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
+        try {
+            Path outputPolicies = folder.resolve("Policies.xml");
+            writeDocument(policiesDoc, outputPolicies);
 
-        Path outputPolicies = folder.resolve("Policies.xml");
-        writeDocument(policiesDoc, outputPolicies);
+            Path outputPvConfiguration = folder.resolve("PVConfiguration.xml");
+            writeDocument(pvDoc, outputPvConfiguration);
 
-        Path outputPvConfiguration = folder.resolve("PVConfiguration.xml");
-        writeDocument(pvDoc, outputPvConfiguration);
+            Path changelog = folder.resolve("changelog.txt");
+            writeChangelog(changelog, "Remove (Policies.xml + PVConfiguration.xml)", sourceLabel, sourceFolder,
+                    removeSet, edit, removedDefinitions);
 
-        Path changelog = folder.resolve("changelog.txt");
-        writeChangelog(changelog, "Remove (Policies.xml + PVConfiguration.xml)", sourceLabel, sourceFolder,
-                removeSet, edit, removedDefinitions);
-
-        return new RemovalResult(false, outputPolicies, outputPvConfiguration, changelog,
-                edit.totalRemoved(), removedDefinitions, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+            return new RemovalResult(false, outputPolicies, outputPvConfiguration, changelog,
+                    edit.totalRemoved(), removedDefinitions, edit.removedPerComponent(), edit.emptyPoliciesFixed());
+        } catch (Exception failure) {
+            deleteFolderQuietly(folder);
+            throw failure;
+        }
     }
 
     // ---------------------------------------------------------------------------------- Populate empty
@@ -649,15 +681,20 @@ public class ComponentOperations {
         assertRemovalComplete(policiesDoc, null, Set.of());
 
         Path folder = createOutputFolder(outputRoot, sourceLabel);
-        Path outputPolicies = folder.resolve("Policies.xml");
-        writeDocument(policiesDoc, outputPolicies);
+        try {
+            Path outputPolicies = folder.resolve("Policies.xml");
+            writeDocument(policiesDoc, outputPolicies);
 
-        Path changelog = folder.resolve("changelog.txt");
-        writeChangelog(changelog, "Populate empty policies (Policies.xml only)", sourceLabel, sourceFolder,
-                Set.of(), edit, 0);
+            Path changelog = folder.resolve("changelog.txt");
+            writeChangelog(changelog, "Populate empty policies (Policies.xml only)", sourceLabel, sourceFolder,
+                    Set.of(), edit, 0);
 
-        return new RemovalResult(false, outputPolicies, null, changelog,
-                0, 0, Map.of(), edit.emptyPoliciesFixed());
+            return new RemovalResult(false, outputPolicies, null, changelog,
+                    0, 0, Map.of(), edit.emptyPoliciesFixed());
+        } catch (Exception failure) {
+            deleteFolderQuietly(folder);
+            throw failure;
+        }
     }
 
     // ---------------------------------------------------------------------------------- Policies editing
@@ -790,6 +827,23 @@ public class ComponentOperations {
     }
 
     // ---------------------------------------------------------------------------------------- Changelog
+
+    private void deleteFolderQuietly(Path folder) {
+        if (folder == null) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> paths = Files.walk(folder)) {
+            paths.sorted(Collections.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // Best-effort cleanup of a partially written output folder.
+                }
+            });
+        } catch (IOException ignored) {
+            // Folder already gone or not walkable; nothing else to clean up.
+        }
+    }
 
     private Path createOutputFolder(Path outputRoot, String sourceLabel) throws IOException {
         String base = LocalDateTime.now().format(FOLDER_TIMESTAMP) + "_" + sanitizeFileName(sourceLabel);
@@ -1018,20 +1072,53 @@ public class ComponentOperations {
         transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
         StringWriter writer = new StringWriter();
         transformer.transform(new DOMSource(element), new StreamResult(writer));
-        return writer.toString();
+        return spaceBeforeSelfClosingTags(writer.toString());
+    }
+
+    // CyberArk / Idira (a .NET XmlWriter) writes a space before "/>" on self-closing tags; the JAXP
+    // Transformer omits it. Re-add it so our output matches the source formatting. This is purely cosmetic
+    // (insignificant XML whitespace) and never changes meaning. Both replacements are safe: an unescaped '"'
+    // only ever delimits an attribute value (literal quotes in values are written as &quot;), and an
+    // unescaped '<' only ever starts a tag (literal '<' in text/attribute content is written as &lt;), so
+    // neither pattern can occur inside element text or attribute values.
+    private static String spaceBeforeSelfClosingTags(String xml) {
+        StringBuilder out = new StringBuilder(xml.length() + 64);
+        int i = 0;
+        int length = xml.length();
+        while (i < length) {
+            if (xml.startsWith("<!--", i)) {
+                int end = xml.indexOf("-->", i);
+                int stop = end < 0 ? length : end + 3;
+                out.append(xml, i, stop);
+                i = stop;
+            } else if (xml.startsWith("<![CDATA[", i)) {
+                int end = xml.indexOf("]]>", i);
+                int stop = end < 0 ? length : end + 3;
+                out.append(xml, i, stop);
+                i = stop;
+            } else {
+                out.append(xml.charAt(i));
+                i++;
+            }
+        }
+        String markup = out.toString();
+        markup = markup.replace("\"/>", "\" />");
+        return markup.replaceAll("(<[A-Za-z_][A-Za-z0-9_.:\\-]*)/>", "$1 />");
     }
 
     private void writeDocument(Document doc, Path path) throws Exception {
         Transformer transformer = newSecureTransformer();
         transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+        StringWriter writer = new StringWriter();
+        transformer.transform(new DOMSource(doc), new StreamResult(writer));
+        byte[] bytes = spaceBeforeSelfClosingTags(writer.toString()).getBytes(StandardCharsets.UTF_8);
+
         Path parent = path.getParent();
         Path tempFile = parent == null
                 ? Files.createTempFile("vaultops", ".xml.tmp")
                 : Files.createTempFile(parent, "vaultops", ".xml.tmp");
         try {
-            try (OutputStream out = Files.newOutputStream(tempFile)) {
-                transformer.transform(new DOMSource(doc), new StreamResult(out));
-            }
+            Files.write(tempFile, bytes);
             try {
                 Files.move(tempFile, path, StandardCopyOption.ATOMIC_MOVE);
             } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
@@ -1044,6 +1131,11 @@ public class ComponentOperations {
 
     private Transformer newSecureTransformer() throws Exception {
         TransformerFactory tf = TransformerFactory.newInstance();
+        try {
+            tf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        } catch (Exception ignored) {
+            // Feature not supported by this implementation; safe to ignore.
+        }
         try {
             tf.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
         } catch (IllegalArgumentException ignored) {

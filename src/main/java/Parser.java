@@ -65,7 +65,16 @@ public class Parser {
     }
 
     static PVConfigurationParser.XmlNode parseElementTree(Element element) {
-        return new PVConfigurationParser.XmlNode(element.getTagName(), parseAttributes(element), parseChildElements(element));
+        return parseElementTree(element, 0);
+    }
+
+    private static final int MAX_TREE_DEPTH = 512;
+
+    private static PVConfigurationParser.XmlNode parseElementTree(Element element, int depth) {
+        if (depth > MAX_TREE_DEPTH) {
+            throw new IllegalStateException("XML nesting exceeds the supported depth of " + MAX_TREE_DEPTH + ".");
+        }
+        return new PVConfigurationParser.XmlNode(element.getTagName(), parseAttributes(element), parseChildElements(element, depth));
     }
 
     private static Map<String, String> parseAttributes(Element element) {
@@ -79,12 +88,16 @@ public class Parser {
     }
 
     static List<PVConfigurationParser.XmlNode> parseChildElements(Element element) {
+        return parseChildElements(element, 0);
+    }
+
+    private static List<PVConfigurationParser.XmlNode> parseChildElements(Element element, int depth) {
         List<PVConfigurationParser.XmlNode> children = new ArrayList<>();
         NodeList nodes = element.getChildNodes();
         for (int i = 0; i < nodes.getLength(); i++) {
             Node node = nodes.item(i);
             if (node.getNodeType() == Node.ELEMENT_NODE) {
-                children.add(parseElementTree((Element) node));
+                children.add(parseElementTree((Element) node, depth + 1));
             }
         }
         return children;

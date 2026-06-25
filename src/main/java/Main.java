@@ -21,6 +21,8 @@ public class Main extends Application {
         ui.setOnConnectionComponentRowDoubleClicked(controller::showConnectionComponentDetails);
         ui.setOnConnectionComponentSelected(controller::onConnectionComponentSelected);
         ui.setOnConnectionComponentExport(controller::exportConnectionComponents);
+        ui.setOnOpenOutputFolder(controller::openOutputFolder);
+        ui.setOnOpenExportsFolder(controller::openExportsFolder);
         ui.setOnConnectionComponentRemove(controller::removeConnectionComponents);
         ui.setOnConnectionComponentUnlink(controller::unlinkConnectionComponents);
         ui.setOnOrderComponents(controller::orderConnectionComponents);
@@ -52,6 +54,7 @@ public class Main extends Application {
         ui.setCompareItemLoader(controller::loadCompareItems);
         ui.setCompareRunner(controller::runCompare);
         ui.setOnAppClose(controller::shutdown);
+        ui.setActiveOperationCheck(controller::hasActiveOperations);
         ui.setupUI(stage);
         controller.loadAll();
     }

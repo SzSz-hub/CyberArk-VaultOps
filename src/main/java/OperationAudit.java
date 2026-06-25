@@ -2,39 +2,64 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public final class OperationAudit {
 
     private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final long MAX_LOG_BYTES = 5L * 1024 * 1024;
+    private static final int ROTATED_LOGS = 5;
 
     private final Path auditFile;
+    private volatile Consumer<String> warningHandler = message -> {};
 
     public OperationAudit(Path auditFile) {
         this.auditFile = auditFile;
     }
 
+    public void setWarningHandler(Consumer<String> warningHandler) {
+        this.warningHandler = warningHandler == null ? message -> {} : warningHandler;
+    }
+
     // -------------------------------------------------------------------------------------- record
 
-    public synchronized void record(String operation, Map<String, String> fields) {
+    public synchronized boolean record(String operation, Map<String, String> fields) {
         if (auditFile == null) {
-            return;
+            return false;
         }
         try {
             Path parent = auditFile.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
+            rotateIfNeeded();
             String line = LocalDateTime.now().format(TIMESTAMP) + "\t" + safe(operation) + "\t" + render(fields)
                     + System.lineSeparator();
             Files.writeString(auditFile, line, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException ignored) {
-            // Audit logging is best-effort and must never break a user operation.
+            return true;
+        } catch (IOException failure) {
+            warningHandler.accept("Audit logging failed for '" + safe(operation) + "': " + failure.getMessage());
+            return false;
+        }
+    }
+
+    private void rotateIfNeeded() throws IOException {
+        if (!Files.exists(auditFile) || Files.size(auditFile) < MAX_LOG_BYTES) {
+            return;
+        }
+        for (int index = ROTATED_LOGS; index >= 1; index--) {
+            Path source = index == 1 ? auditFile : auditFile.resolveSibling(auditFile.getFileName() + "." + (index - 1));
+            Path target = auditFile.resolveSibling(auditFile.getFileName() + "." + index);
+            if (Files.exists(source)) {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         }
     }
 
@@ -67,4 +92,3 @@ public final class OperationAudit {
         return value.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');
     }
 }
-

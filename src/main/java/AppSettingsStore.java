@@ -72,6 +72,7 @@ public class AppSettingsStore {
         settings.setActiveProfileId(properties.getProperty("activeProfile", ""));
         settings.setTheme(properties.getProperty("theme", AppSettings.DEFAULT_THEME));
         settings.setDefaultReplacementComponentId(properties.getProperty("defaultReplacementComponent", ""));
+        settings.setStorageLocation(properties.getProperty("storageLocation", ""));
         settings.ensureValidActiveProfile();
 
         if (!Files.exists(settingsPath)) {
@@ -103,6 +104,7 @@ public class AppSettingsStore {
         properties.setProperty("activeProfile", valueOrEmpty(settings.getActiveProfileId()));
         properties.setProperty("theme", valueOrEmpty(settings.getTheme()));
         properties.setProperty("defaultReplacementComponent", valueOrEmpty(settings.getDefaultReplacementComponentId()));
+        properties.setProperty("storageLocation", valueOrEmpty(settings.getStorageLocation()));
 
         writeAtomically(properties);
     }
@@ -116,18 +118,23 @@ public class AppSettingsStore {
         Path tempFile = null;
         try {
             Files.createDirectories(directory);
-            tempFile = Files.createTempFile(directory, "app", ".properties.tmp");
+            Path lockPath = target.resolveSibling(target.getFileName() + ".lock");
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(lockPath,
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE);
+                 java.nio.channels.FileLock ignored = channel.lock()) {
+                tempFile = Files.createTempFile(directory, "app", ".properties.tmp");
 
-            try (OutputStream out = Files.newOutputStream(tempFile)) {
-                properties.store(out, "CyberArkAdminTool settings");
-            }
+                try (OutputStream out = Files.newOutputStream(tempFile)) {
+                    properties.store(out, "CyberArkAdminTool settings");
+                }
 
-            try {
-                Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException atomicUnsupported) {
-                Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+                try {
+                    Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException atomicUnsupported) {
+                    Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                tempFile = null;
             }
-            tempFile = null;
         } catch (IOException e) {
             reportError("Failed to save settings to " + target + ": " + describe(e));
         } finally {
