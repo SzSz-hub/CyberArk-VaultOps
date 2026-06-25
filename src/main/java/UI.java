@@ -12,6 +12,7 @@ import javafx.scene.control.*;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -1295,7 +1296,7 @@ public class UI {
             dialog.close();
         });
 
-        HBox actions = new HBox(8, addButton);
+        FlowPane actions = new FlowPane(8, 8, addButton);
         if (skipAllowed) {
             Button skipButton = new Button("Skip (leave empty)");
             skipButton.setOnAction(event -> {
@@ -1326,6 +1327,9 @@ public class UI {
         Scene scene = new Scene(content, 520, 380);
         applyTheme(scene);
         dialog.setScene(scene);
+        dialog.setMinWidth(520);
+        dialog.setMinHeight(380);
+        dialog.sizeToScene();
         dialog.showAndWait();
         return result[0];
     }
