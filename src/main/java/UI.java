@@ -1,6 +1,7 @@
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
@@ -31,6 +32,7 @@ import javafx.scene.input.TransferMode;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.stage.WindowEvent;
@@ -86,6 +88,7 @@ public class UI {
     private SideNav sideNav;
     private Stage primaryStage;
     private Scene mainScene;
+    private Button primaryMaximizeButton;
     private Menu themeMenu;
     private boolean suppressSideNavCallbacks;
     private Stage aboutStage;
@@ -543,10 +546,9 @@ public class UI {
         minimizeButton.setOnAction(event -> primaryStage.setIconified(true));
 
         Button maximizeButton = windowButton(
-                primaryStage.isMaximized() ? restoreGlyph() : maximizeGlyph(), "window-maximize");
+                isWindowMaximized(primaryStage) ? restoreGlyph() : maximizeGlyph(), "window-maximize");
         maximizeButton.setOnAction(event -> toggleMaximize());
-        primaryStage.maximizedProperty().addListener((obs, wasMax, isMax) ->
-                maximizeButton.setGraphic(isMax ? restoreGlyph() : maximizeGlyph()));
+        primaryMaximizeButton = maximizeButton;
 
         Button closeButton = windowButton(closeGlyph(), "window-close");
         closeButton.setOnAction(event -> requestCloseFromButton());
@@ -601,7 +603,7 @@ public class UI {
         bar.setOnMouseClicked(event -> {
             if (event.getButton() == MouseButton.PRIMARY && event.getClickCount() == 2
                     && stage.isResizable() && !isWindowButton(event.getTarget())) {
-                stage.setMaximized(!stage.isMaximized());
+                toggleWindowMaximize(stage);
             }
         });
 
@@ -632,7 +634,7 @@ public class UI {
             }
         });
         bar.setOnMouseDragged(event -> {
-            if (event.getButton() == MouseButton.PRIMARY && !stage.isMaximized()) {
+            if (event.getButton() == MouseButton.PRIMARY && !isWindowMaximized(stage)) {
                 stage.setX(event.getScreenX() - dragOffset[0]);
                 stage.setY(event.getScreenY() - dragOffset[1]);
             }
@@ -706,7 +708,59 @@ public class UI {
     }
 
     private void toggleMaximize() {
-        primaryStage.setMaximized(!primaryStage.isMaximized());
+        toggleWindowMaximize(primaryStage);
+        if (primaryMaximizeButton != null) {
+            primaryMaximizeButton.setGraphic(
+                    isWindowMaximized(primaryStage) ? restoreGlyph() : maximizeGlyph());
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------- WINDOW MAXIMIZE
+    // Undecorated stages must maximize manually: JavaFX's setMaximized() covers the whole
+    // screen (hiding the Windows taskbar), so we snap to Screen.getVisualBounds() instead.
+    private static final Object MAXIMIZED_KEY = new Object();
+    private static final Object RESTORE_BOUNDS_KEY = new Object();
+
+    boolean isWindowMaximized(Stage stage) {
+        return Boolean.TRUE.equals(stage.getProperties().get(MAXIMIZED_KEY));
+    }
+
+    void toggleWindowMaximize(Stage stage) {
+        if (isWindowMaximized(stage)) {
+            restoreWindow(stage);
+        } else {
+            maximizeWindow(stage);
+        }
+    }
+
+    private void maximizeWindow(Stage stage) {
+        stage.getProperties().put(RESTORE_BOUNDS_KEY,
+                new double[]{stage.getX(), stage.getY(), stage.getWidth(), stage.getHeight()});
+        Rectangle2D bounds = visualBoundsFor(stage);
+        stage.setX(bounds.getMinX());
+        stage.setY(bounds.getMinY());
+        stage.setWidth(bounds.getWidth());
+        stage.setHeight(bounds.getHeight());
+        stage.getProperties().put(MAXIMIZED_KEY, Boolean.TRUE);
+    }
+
+    private void restoreWindow(Stage stage) {
+        stage.getProperties().put(MAXIMIZED_KEY, Boolean.FALSE);
+        Object restore = stage.getProperties().get(RESTORE_BOUNDS_KEY);
+        if (restore instanceof double[] b && b.length == 4) {
+            stage.setX(b[0]);
+            stage.setY(b[1]);
+            stage.setWidth(b[2]);
+            stage.setHeight(b[3]);
+        }
+    }
+
+    private Rectangle2D visualBoundsFor(Stage stage) {
+        double centerX = stage.getX() + stage.getWidth() / 2;
+        double centerY = stage.getY() + stage.getHeight() / 2;
+        List<Screen> screens = Screen.getScreensForRectangle(centerX, centerY, 1, 1);
+        Screen screen = screens.isEmpty() ? Screen.getPrimary() : screens.get(0);
+        return screen.getVisualBounds();
     }
 
     private void requestCloseFromButton() {
@@ -719,14 +773,14 @@ public class UI {
         final double[] start = new double[6];
 
         scene.addEventFilter(MouseEvent.MOUSE_MOVED, event -> {
-            if (stage.isMaximized()) {
+            if (isWindowMaximized(stage)) {
                 scene.setCursor(Cursor.DEFAULT);
                 return;
             }
             scene.setCursor(cursorForZone(resizeZone(scene, event.getX(), event.getY(), edge)));
         });
         scene.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
-            if (event.getButton() != MouseButton.PRIMARY || stage.isMaximized()) {
+            if (event.getButton() != MouseButton.PRIMARY || isWindowMaximized(stage)) {
                 activeZone[0] = 0;
                 return;
             }
