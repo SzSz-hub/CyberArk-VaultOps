@@ -38,6 +38,16 @@ A JavaFX-based administration tool for CyberArk Vault configurations, designed t
     - When a removal would leave a policy with no connection component, a dialog prompts for a
       replacement (choose the component, whether it is enabled/visible, optionally apply the same
       choice to all further cases, or cancel the whole operation).
+    - **Order...** (`Edit` menu): a scope-based dialog reorders, per scope, either the
+      `ConnectionComponent` definitions in `PVConfiguration.xml` (sorted by Id) or the components
+      assigned inside a single `<Policy>` in `Policies.xml` (sorted by display name). Pick a scope
+      from the searchable dropdown, then auto-sort A→Z, move items up/down, "Sort all" scopes at
+      once, or right-click for selection-based sorting (sort only the selected, sort the selected
+      into the list, or sort everything except the selected).
+    - **Import PSM Component (Offline)...** (`File` menu): reads a `CC-*.xml` from an exported zip
+      and inserts it into `PVConfiguration.xml` as a new component definition.
+    - All of these offline edits are non-destructive: source files are never modified — updated
+      copies plus a `changelog.txt` are written to `<storageLocation>/output/<timestamp>_<source>/`.
 
 - **Policies**: View all access policies by device type
   - See which connection components are assigned
@@ -67,6 +77,46 @@ Compare two items of the **same kind** side by side (`Compare` menu → *Compare
   (e.g. `PSM-google` vs `PSM-google-entraid`).
 - Results show every property as `path = value` with an A/B/Status column, row highlighting for
   differences and items present on only one side, and a "show only differences" toggle.
+
+### Find Orphaned Component References
+
+`Edit` menu → *Find Orphaned Component References...* scans the **active source** for connection
+components that are assigned to a policy/platform in `Policies.xml` but whose `<ConnectionComponent>`
+definition is missing from `PVConfiguration.xml` (dangling references):
+
+- Results open in a filterable table (Component Id / Platform / Policy / Enabled / Overrides).
+- The scan never edits any file on its own.
+- To clean up, right-click a row for **Remove This Reference...** (that component from just that one
+  policy) or **Remove Component From All Policies...**, or use the **Remove All Orphans...** button.
+  Because orphans have no definition, removal is an *unlink* of the references from `Policies.xml`
+  only — written non-destructively to `output/<timestamp>_<source>/` like every other offline edit.
+  The same empty-policy replacement prompt applies if a removal would empty a policy.
+
+### Populate Empty Policies
+
+`Edit` menu → *Populate Empty Policies...* scans the active source for policies whose
+`<ConnectionComponents>` list is empty and lets you fill or skip each one. Disabled / grouping
+policies may legitimately have no component, so you can add a replacement **or** skip it (leave it
+empty). The default replacement is the global `defaultReplacementComponent` (Settings → General),
+falling back to the first available component. Output is written non-destructively; nothing is
+written when there are no empties or you skip them all.
+
+### Online (PVWA) Operations
+
+The `PVWA` menu drives a minimal CyberArk / Idira PVWA REST client for pushing components straight
+to a live environment:
+
+- **Connect to PVWA...** — enter the base URL, authentication method (CyberArk / LDAP / RADIUS /
+  Windows), credentials, and toggles for concurrent sessions and ignoring certificate errors. The
+  "ignore certificate errors" toggle defaults to **off** (secure); enabling it, or using a plaintext
+  `http://` address, requires an explicit confirmation. Connection state shows in the status bar.
+- **Disconnect from PVWA** — logs off; if logoff fails the session is kept so it can be retried.
+- **Import Component from File (Online)...** — pushes a packaged component zip from disk.
+- **Import Selected Component(s) (Online)...** — packages each selected component in memory and
+  pushes it to the connected PVWA.
+
+All online operations run in the background and are recorded in the audit log
+(`operations.log`) — passwords and session tokens are never logged.
 
 ### Source Profile Management
 
@@ -177,7 +227,7 @@ Windows, `~/.cyberark-vaultops` otherwise):
 
 - `operations.log` — the **audit log**: an append-only record of online (PVWA logon/import/
   logoff) and high-risk offline operations (order/import/remove/unlink/populate). Never records
-  passwords or session tokens.
+  passwords or session tokens. View it in-app via **Help → View Operations Log...**.
 - `diagnostics.log` — a durable, rotating **diagnostics log** of warnings, errors and notable
   activity, viewable in-app via **Help → View Diagnostics Log...** (filter by level/text, refresh,
   open file location, or clear). Both logs rotate when they grow past 5 MB.
@@ -321,12 +371,20 @@ git push origin v1.0.0
 
 ## Architecture
 
-- **AppController**: Loads data, manages caching, coordinates UI updates
+- **AppController**: Loads data, manages caching, coordinates UI updates, and orchestrates the
+  offline edit and online (PVWA) operations
 - **AppSettings**: Stores user profiles and preferences
 - **PoliciesParser**: DOM-based Policies.xml parser
 - **PVConfigurationParser**: DOM-based PVConfiguration.xml parser
-- **ComponentOperations**: Exports connection components to zip, and removes (Policies.xml + PVConfiguration.xml) or unlinks (Policies.xml only) them with timestamped output + changelog
-- **UI**: JavaFX components (TableView, SplitPane, TreeView)
+- **ComponentOperations**: Offline edits — export to zip, order/sort, import-from-zip, remove
+  (Policies.xml + PVConfiguration.xml), unlink (Policies.xml only) and populate-empty-policies, all
+  written non-destructively as timestamped output + changelog
+- **PvwaClient**: Minimal CyberArk / Idira PVWA REST client (logon, connection-component import, logoff)
+- **Compare**: Pure flatten/diff logic behind the compare feature
+- **OrphanScan**: Finds policy component references with no matching definition
+- **OperationAudit / DiagnosticsLog**: Append-only audit log and rotating diagnostics log
+- **RetentionManager**: Auto-purges old output/exports artifacts past the configured age
+- **UI**: JavaFX components (TableView, SplitPane, TreeView) with a themed custom (undecorated) window chrome
 - **SideNav**: Profile selection sidebar with drag-reorder
 - **ThemeManager**: CSS theme loading and switching
 
