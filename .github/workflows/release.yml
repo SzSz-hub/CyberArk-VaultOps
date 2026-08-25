@@ -26,8 +26,6 @@ jobs:
             classifier: windows-x64
           - os: ubuntu-latest
             classifier: linux-x64
-          - os: macos-26-intel
-            classifier: macos-x64
           - os: macos-14
             classifier: macos-latest
     steps:
